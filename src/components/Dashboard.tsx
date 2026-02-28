@@ -20,11 +20,11 @@ function Dashboard({ stats }: DashboardProps) {
       {/* Key Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="card">
-          <p className="text-sm text-gray-500">Calls Coming Up</p>
+          <p className="text-xs text-gray-500">Calls Coming Up</p>
           <p className="text-3xl font-bold text-primary-600">5</p>
           <ul className="mt-3 space-y-1">
             {upcomingCalls.map((call) => (
-              <li key={call.name} className="text-xs text-gray-500 flex justify-between">
+              <li key={call.name} className="text-xs text-gray-500 flex gap-2">
                 <span className="font-medium text-gray-700">{call.name}</span>
                 <span>{call.time}</span>
               </li>
@@ -32,7 +32,7 @@ function Dashboard({ stats }: DashboardProps) {
           </ul>
         </div>
         <div className="card">
-          <p className="text-sm text-gray-500">Clients Awaiting Response</p>
+          <p className="text-xs text-gray-500">Clients Awaiting Response</p>
           <p className="text-3xl font-bold text-amber-600">8</p>
           <ul className="mt-3 space-y-1">
             {awaitingResponse.map((name) => (
@@ -43,12 +43,12 @@ function Dashboard({ stats }: DashboardProps) {
           </ul>
         </div>
         <div className="card">
-          <p className="text-sm text-gray-500">Clients In Progress</p>
+          <p className="text-xs text-gray-500">Clients In Progress</p>
           <p className="text-3xl font-bold text-primary-600">12</p>
           <p className="text-xs text-gray-400 mt-3">Active pipeline</p>
         </div>
         <div className="card">
-          <p className="text-sm text-gray-500">Clients Converted</p>
+          <p className="text-xs text-gray-500">Clients Converted</p>
           <p className="text-3xl font-bold text-green-600">34</p>
           <p className="text-xs text-gray-400 mt-3">Successful deals</p>
         </div>
@@ -116,7 +116,6 @@ function Dashboard({ stats }: DashboardProps) {
         <div className="flex gap-4">
           <button className="btn-primary">Add New Client</button>
           <button className="btn-secondary">Start Recording</button>
-          <button className="btn-secondary">Upload Document</button>
         </div>
       </div>
     </div>

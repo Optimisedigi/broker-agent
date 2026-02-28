@@ -5,17 +5,40 @@ import Clients from './components/Clients'
 import BankPolicies from './components/BankPolicies'
 import Meetings from './components/Meetings'
 import Settings from './components/Settings'
+import Team from './components/Team'
 
-type View = 'dashboard' | 'clients' | 'policies' | 'meetings' | 'settings'
+type View = 'dashboard' | 'team' | 'clients' | 'policies' | 'meetings' | 'settings'
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard')
   const [stats, setStats] = useState<any>(null)
   const [logo, setLogo] = useState<string | null>(null)
   const [howItWorksOpen, setHowItWorksOpen] = useState(false)
+  const [profile, setProfile] = useState<{ name: string; photo: string | null } | null>(null)
+  const [zoom, setZoom] = useState(() => {
+    const saved = localStorage.getItem('content_zoom')
+    return saved ? parseFloat(saved) : 90
+  })
+
+  const handleZoomIn = () => {
+    setZoom(prev => {
+      const next = Math.min(150, prev + 5)
+      localStorage.setItem('content_zoom', String(next))
+      return next
+    })
+  }
+
+  const handleZoomOut = () => {
+    setZoom(prev => {
+      const next = Math.max(60, prev - 5)
+      localStorage.setItem('content_zoom', String(next))
+      return next
+    })
+  }
 
   useEffect(() => {
     loadDashboardStats()
+    loadProfile()
     const saved = localStorage.getItem('broker_logo')
     if (saved) setLogo(saved)
   }, [])
@@ -29,10 +52,23 @@ function App() {
     }
   }
 
+  const loadProfile = async () => {
+    try {
+      const data: any = await invoke('get_broker_profile')
+      if (data) {
+        setProfile({ name: data.name, photo: data.photo || null })
+      }
+    } catch (error) {
+      console.error('Failed to load profile:', error)
+    }
+  }
+
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
         return <Dashboard stats={stats} />
+      case 'team':
+        return <Team profile={profile} />
       case 'clients':
         return <Clients />
       case 'policies':
@@ -40,7 +76,7 @@ function App() {
       case 'meetings':
         return <Meetings />
       case 'settings':
-        return <Settings onLogoChange={setLogo} />
+        return <Settings onLogoChange={setLogo} onProfileChange={setProfile} />
       default:
         return <Dashboard stats={stats} />
     }
@@ -55,11 +91,10 @@ function App() {
             <img
               src={logo}
               alt="Company logo"
-              className="max-w-[172px] max-h-[172px] object-contain mb-2"
+              className="-ml-[10px] max-w-[172px] max-h-[172px] object-contain mb-2"
             />
           )}
-          <h1 className="text-xs font-bold text-primary-700">Broker Agent</h1>
-          <p className="text-sm text-gray-500 mt-1">Beta; MVP</p>
+          <h1 className="text-xs font-bold text-primary-700">Broker Agent (Beta)</h1>
         </div>
         <nav className="p-4 flex-1">
           <ul className="space-y-2">
@@ -72,7 +107,19 @@ function App() {
                     : 'hover:bg-gray-100'
                 }`}
               >
-                Dashboard
+                Client Dashboard
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => setCurrentView('team')}
+                className={`w-full text-left px-4 py-2 rounded-lg transition-colors ${
+                  currentView === 'team'
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'hover:bg-gray-100'
+                }`}
+              >
+                Team Dashboard
               </button>
             </li>
             <li>
@@ -158,21 +205,44 @@ function App() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto">
-        <header className="bg-white shadow-sm px-8 py-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-semibold capitalize">{currentView}</h2>
-            <div className="text-sm text-gray-500">
-              {new Date().toLocaleDateString('en-AU', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
+      <div className="flex-1 overflow-auto relative">
+        <div style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top left', width: `${10000 / zoom}%` }}>
+          <header className="bg-white shadow-sm px-8 py-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-semibold">
+                {{ dashboard: 'Client Dashboard', team: 'Team Dashboard', clients: 'Clients', policies: 'Bank Policies', meetings: 'Meetings & Recording', settings: 'Settings' }[currentView]}
+              </h2>
+              <div className="text-sm text-gray-500">
+                {new Date().toLocaleDateString('en-AU', {
+                  weekday: 'long',
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </div>
             </div>
-          </div>
-        </header>
-        <main className="p-8">{renderView()}</main>
+          </header>
+          <main className="p-8">{renderView()}</main>
+        </div>
+
+        {/* Zoom Controls */}
+        <div className="fixed bottom-4 right-4 flex items-center gap-1 bg-white border border-gray-200 rounded-lg shadow-md px-1 py-1 z-50 opacity-50 hover:opacity-100 transition-opacity">
+          <button
+            onClick={handleZoomOut}
+            className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-600 text-lg font-medium"
+            title="Zoom out"
+          >
+            -
+          </button>
+          <span className="text-xs text-gray-500 w-10 text-center select-none">{zoom}%</span>
+          <button
+            onClick={handleZoomIn}
+            className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-600 text-lg font-medium"
+            title="Zoom in"
+          >
+            +
+          </button>
+        </div>
       </div>
     </div>
   )

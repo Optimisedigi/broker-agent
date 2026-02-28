@@ -20,13 +20,13 @@
     ],
     "longDescription": "",
     "macOS": {
-      "entitlements": null,
+      "entitlements": "Entitlements.plist",
       "exceptionDomain": "",
       "frameworks": [],
       "providerShortName": null,
       "signingIdentity": null
     },
-    "resources": [],
+    "resources": ["resources/ggml-base.bin"],
     "shortDescription": "",
     "linux": {
       "deb": {
@@ -39,7 +39,7 @@
       "timestampUrl": ""
     }
   },
-  "productName": "Broker Bot",
+  "productName": "Broker Agent",
   "version": "0.1.0",
   "identifier": "com.brokerage.crm",
   "plugins": {},
@@ -52,7 +52,7 @@
         "fullscreen": false,
         "height": 800,
         "resizable": true,
-        "title": "Broker Bot",
+        "title": "Broker Agent",
         "width": 1200,
         "center": true
       }
