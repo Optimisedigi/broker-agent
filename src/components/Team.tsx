@@ -1,8 +1,16 @@
+import { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+
 interface TeamProps {
   profile: {
     name: string
     photo: string | null
   } | null
+}
+
+interface ReferralStat {
+  source: string
+  count: number
 }
 
 const DUMMY_BROKERS = [
@@ -66,6 +74,13 @@ function getRankLabel(rank: number) {
 
 function Team({ profile }: TeamProps) {
   const profileName = profile?.name || ''
+  const [referralStats, setReferralStats] = useState<ReferralStat[]>([])
+
+  useEffect(() => {
+    invoke<ReferralStat[]>('get_referral_stats')
+      .then(setReferralStats)
+      .catch(err => console.error('Failed to load referral stats:', err))
+  }, [])
 
   // Find if the user matches any dummy broker, otherwise insert as 4th
   const isInList = DUMMY_BROKERS.some(
@@ -85,11 +100,12 @@ function Team({ profile }: TeamProps) {
           : b
       )
 
-  const totalDeals = brokers.reduce((sum, b) => sum + b.deals, 0)
   const totalPipeline = brokers.reduce((sum, b) => sum + b.pipeline, 0)
   const avgConversion = Math.round(
     brokers.reduce((sum, b) => sum + b.conversion, 0) / brokers.length
   )
+
+  const maxReferralCount = referralStats.length > 0 ? referralStats[0].count : 1
 
   return (
     <div className="space-y-6">
@@ -101,9 +117,9 @@ function Team({ profile }: TeamProps) {
           <p className="text-xs text-gray-400 mt-1">Active brokers</p>
         </div>
         <div className="card">
-          <p className="text-sm text-gray-500">Total Deals This Month</p>
-          <p className="text-2xl font-bold text-gray-900">{totalDeals}</p>
-          <p className="text-xs text-green-600 mt-1">+12% vs last month</p>
+          <p className="text-sm text-gray-500">Top Referral Source</p>
+          <p className="text-2xl font-bold text-gray-900">{referralStats.length > 0 ? referralStats[0].source : 'N/A'}</p>
+          <p className="text-xs text-gray-400 mt-1">{referralStats.length > 0 ? `${referralStats[0].count} client${referralStats[0].count !== 1 ? 's' : ''}` : 'No data yet'}</p>
         </div>
         <div className="card">
           <p className="text-sm text-gray-500">Team Pipeline Value</p>
@@ -118,6 +134,32 @@ function Team({ profile }: TeamProps) {
           <p className="text-xs text-gray-400 mt-1">Team average</p>
         </div>
       </div>
+
+      {/* Client Referral Sources */}
+      {referralStats.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Client Referral Sources</h3>
+            <span className="text-sm text-gray-500">
+              {referralStats.reduce((sum, s) => sum + s.count, 0)} total responses
+            </span>
+          </div>
+          <div className="space-y-3">
+            {referralStats.map((stat) => (
+              <div key={stat.source} className="flex items-center gap-3">
+                <span className="text-sm text-gray-700 w-36 flex-shrink-0 truncate">{stat.source}</span>
+                <div className="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden">
+                  <div
+                    className="bg-primary-500 h-full rounded-full transition-all"
+                    style={{ width: `${(stat.count / maxReferralCount) * 100}%` }}
+                  />
+                </div>
+                <span className="text-sm font-medium text-gray-900 w-8 text-right">{stat.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Leaderboard */}
       <div className="card">

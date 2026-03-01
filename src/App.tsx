@@ -17,7 +17,7 @@ function App() {
   const [profile, setProfile] = useState<{ name: string; photo: string | null } | null>(null)
   const [zoom, setZoom] = useState(() => {
     const saved = localStorage.getItem('content_zoom')
-    return saved ? parseFloat(saved) : 90
+    return saved ? parseFloat(saved) : 80
   })
 
   const handleZoomIn = () => {
@@ -66,7 +66,7 @@ function App() {
   const renderView = () => {
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard stats={stats} />
+        return <Dashboard stats={stats} onNavigate={setCurrentView} />
       case 'team':
         return <Team profile={profile} />
       case 'clients':
@@ -91,7 +91,7 @@ function App() {
             <img
               src={logo}
               alt="Company logo"
-              className="-ml-[10px] max-w-[172px] max-h-[172px] object-contain mb-2"
+              className="-ml-[10px] max-w-[146px] max-h-[146px] object-contain mb-2"
             />
           )}
           <h1 className="text-xs font-bold text-primary-700">Broker Agent (Beta)</h1>
@@ -212,13 +212,32 @@ function App() {
               <h2 className="text-2xl font-semibold">
                 {{ dashboard: 'Client Dashboard', team: 'Team Dashboard', clients: 'Clients', policies: 'Bank Policies', meetings: 'Meetings & Recording', settings: 'Settings' }[currentView]}
               </h2>
-              <div className="text-sm text-gray-500">
-                {new Date().toLocaleDateString('en-AU', {
-                  weekday: 'long',
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })}
+              <div className="flex items-center gap-3">
+                <div className="text-sm text-gray-500">
+                  {new Date().toLocaleDateString('en-AU', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
+                </div>
+                <button
+                  onClick={() => setCurrentView('settings')}
+                  className="w-9 h-9 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center hover:bg-primary-200 transition-colors overflow-hidden flex-shrink-0"
+                  title="Settings"
+                >
+                  {profile?.photo ? (
+                    <img src={profile.photo} alt="" className="w-full h-full object-cover" />
+                  ) : profile?.name ? (
+                    <span className="text-sm font-semibold">
+                      {profile.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
+                    </span>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                  )}
+                </button>
               </div>
             </div>
           </header>

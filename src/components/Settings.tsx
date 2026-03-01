@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 interface SettingsProps {
   onLogoChange: (logo: string | null) => void
@@ -33,13 +34,127 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
   const [micError, setMicError] = useState('')
   const [screenError, setScreenError] = useState('')
 
+  // Whisper model state
+  const [whisperStatus, setWhisperStatus] = useState<{ downloaded: boolean; model_name: string; size_bytes: number } | null>(null)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState(0)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  // OAuth state
+  interface OAuthStatus { connected: boolean; provider: string; account_email: string | null; last_sync_at: string | null }
+  const [googleStatus, setGoogleStatus] = useState<OAuthStatus>({ connected: false, provider: 'google', account_email: null, last_sync_at: null })
+  const [outlookStatus, setOutlookStatus] = useState<OAuthStatus>({ connected: false, provider: 'microsoft', account_email: null, last_sync_at: null })
+  const [connecting, setConnecting] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<string | null>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem('broker_logo')
     if (saved) setLogo(saved)
     loadProfile()
     loadTemplates()
+    checkOAuthStatuses()
+    checkWhisperStatus()
+
+    const unlisten = listen<{ downloaded: number; total: number; percent: number }>('whisper-download-progress', (event) => {
+      setDownloadProgress(event.payload.percent)
+    })
+    return () => { unlisten.then(fn => fn()) }
   }, [])
+
+  const checkWhisperStatus = async () => {
+    try {
+      const status: any = await invoke('get_whisper_model_status')
+      setWhisperStatus(status)
+    } catch (err) {
+      console.error('Failed to check whisper status:', err)
+    }
+  }
+
+  const handleDownloadModel = async () => {
+    setDownloading(true)
+    setDownloadProgress(0)
+    setDownloadError(null)
+    try {
+      await invoke('download_whisper_model')
+      await checkWhisperStatus()
+    } catch (err: any) {
+      setDownloadError(err?.toString() || 'Download failed')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  const checkOAuthStatuses = async () => {
+    try {
+      const g: OAuthStatus = await invoke('check_oauth_status', { provider: 'google' })
+      setGoogleStatus(g)
+      const m: OAuthStatus = await invoke('check_oauth_status', { provider: 'microsoft' })
+      setOutlookStatus(m)
+    } catch (err) {
+      console.error('Failed to check OAuth status:', err)
+    }
+  }
+
+  const connectProvider = async (provider: string) => {
+    setConnecting(provider)
+    try {
+      const status: OAuthStatus = await invoke('start_oauth', { provider })
+      if (provider === 'google') setGoogleStatus(status)
+      else setOutlookStatus(status)
+
+      // Auto-sync after connecting
+      setSyncing(true)
+      setSyncResult(null)
+      try {
+        const r: any = await invoke('sync_emails', { provider })
+        setSyncResult(`Connected and imported ${r.imported_count} document${r.imported_count !== 1 ? 's' : ''}`)
+        await checkOAuthStatuses()
+      } catch (syncErr: any) {
+        setSyncResult('Connected successfully')
+      } finally {
+        setSyncing(false)
+      }
+    } catch (err: any) {
+      console.error('OAuth failed:', err)
+      setSyncResult(`Connection error: ${err}`)
+    } finally {
+      setConnecting(null)
+    }
+  }
+
+  const disconnectProvider = async (provider: string) => {
+    try {
+      await invoke('disconnect_oauth', { provider })
+      const empty: OAuthStatus = { connected: false, provider, account_email: null, last_sync_at: null }
+      if (provider === 'google') setGoogleStatus(empty)
+      else setOutlookStatus(empty)
+    } catch (err) {
+      console.error('Disconnect failed:', err)
+    }
+  }
+
+  const handleSyncNow = async () => {
+    setSyncing(true)
+    setSyncResult(null)
+    let total = 0
+    try {
+      if (googleStatus.connected) {
+        const r: any = await invoke('sync_emails', { provider: 'google' })
+        total += r.imported_count
+      }
+      if (outlookStatus.connected) {
+        const r: any = await invoke('sync_emails', { provider: 'microsoft' })
+        total += r.imported_count
+      }
+      setSyncResult(`Imported ${total} document${total !== 1 ? 's' : ''}`)
+      await checkOAuthStatuses()
+    } catch (err: any) {
+      setSyncResult(`Sync failed: ${err}`)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const loadTemplates = () => {
     setIntroEmail(localStorage.getItem('tpl_intro') || `Hi {{client_name}},\n\nThank you for reaching out. My name is {{broker_name}} and I'd love to help you with your property finance needs.\n\nI'd like to schedule a quick call to understand your goals and discuss how I can assist. Are you available this week for a 15-minute chat?\n\nLooking forward to hearing from you.\n\nBest regards,\n{{broker_name}}`)
@@ -472,21 +587,54 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
       <div className="card">
         <h3 className="text-lg font-semibold mb-2">Whisper Transcription</h3>
         <p className="text-sm text-gray-500 mb-4">
-          On-device meeting transcription powered by Whisper AI. The model is bundled with the app, so no data leaves your computer.
+          On-device meeting transcription powered by Whisper AI large-v3. All processing happens locally, no data leaves your computer.
         </p>
         <div className="border border-gray-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-sm">ggml-base.bin</p>
-              <p className="text-xs text-gray-500">Bundled, English optimised, good balance of speed and accuracy</p>
+          {whisperStatus?.downloaded ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-sm">{whisperStatus.model_name}</p>
+                <p className="text-xs text-gray-500">
+                  Large model, highest accuracy, on-device ({(whisperStatus.size_bytes / 1024 / 1024 / 1024).toFixed(1)} GB)
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-green-600">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-sm font-medium">Ready</span>
+              </div>
             </div>
-            <div className="flex items-center gap-2 text-green-600">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              <span className="text-sm font-medium">Bundled</span>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <p className="font-medium text-sm">ggml-large-v3.bin</p>
+                <p className="text-xs text-gray-500">
+                  High-accuracy on-device transcription (~3.1 GB download)
+                </p>
+              </div>
+              {downloading ? (
+                <div className="space-y-2">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-primary-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${downloadProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">Downloading... {downloadProgress}%</p>
+                </div>
+              ) : (
+                <div>
+                  <button onClick={handleDownloadModel} className="btn-primary text-sm">
+                    Download Model
+                  </button>
+                  {downloadError && (
+                    <p className="text-xs text-red-500 mt-2">{downloadError}</p>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -550,36 +698,101 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
 
       {/* Email Integration */}
       <div className="card">
-        <h3 className="text-lg font-semibold mb-4">Email Integration</h3>
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+        <h3 className="text-lg font-semibold mb-2">Email Integration</h3>
+        <p className="text-sm text-gray-500 mb-4">
+          Connect your email to automatically import client attachments (PAYG summaries, bank statements, ID documents).
+        </p>
+
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* Gmail */}
+          <div className="border border-gray-200 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <svg className="w-5 h-5 text-red-500" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
               </svg>
+              <h4 className="font-medium text-sm">Gmail</h4>
             </div>
-            <div className="flex-1">
-              <h4 className="font-medium text-blue-900 mb-1">Connect your Outlook account</h4>
-              <p className="text-sm text-blue-800 mb-3">
-                Automatically scan for client emails with attachments (PAYG summaries, bank statements, ID documents).
-              </p>
-              <p className="text-sm text-blue-700 mb-4">
-                Once connected, Broker Agent will monitor your inbox for emails from your clients and auto-import attached documents.
-              </p>
-              <div className="flex items-center gap-3">
+            {googleStatus.connected ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-green-600">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-sm font-medium">Connected</span>
+                </div>
+                <p className="text-xs text-gray-500 truncate">{googleStatus.account_email}</p>
                 <button
-                  disabled
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg opacity-50 cursor-not-allowed text-sm font-medium"
+                  onClick={() => disconnectProvider('google')}
+                  className="text-xs text-red-500 hover:text-red-700"
                 >
-                  Connect Outlook
+                  Disconnect
                 </button>
-                <span className="text-xs font-medium bg-blue-200 text-blue-800 px-2 py-1 rounded-full">
-                  Coming Soon
-                </span>
               </div>
+            ) : (
+              <button
+                onClick={() => connectProvider('google')}
+                disabled={connecting === 'google'}
+                className="btn-secondary w-full text-sm"
+              >
+                {connecting === 'google' ? 'Connecting...' : 'Connect Gmail'}
+              </button>
+            )}
+          </div>
+
+          {/* Outlook */}
+          <div className="border border-gray-200 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <svg className="w-5 h-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+              </svg>
+              <h4 className="font-medium text-sm">Outlook</h4>
             </div>
+            {outlookStatus.connected ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-green-600">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-sm font-medium">Connected</span>
+                </div>
+                <p className="text-xs text-gray-500 truncate">{outlookStatus.account_email}</p>
+                <button
+                  onClick={() => disconnectProvider('microsoft')}
+                  className="text-xs text-red-500 hover:text-red-700"
+                >
+                  Disconnect
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => connectProvider('microsoft')}
+                disabled={connecting === 'microsoft'}
+                className="btn-secondary w-full text-sm"
+              >
+                {connecting === 'microsoft' ? 'Connecting...' : 'Connect Outlook'}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Sync controls */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSyncNow}
+            disabled={syncing || (!googleStatus.connected && !outlookStatus.connected)}
+            className="btn-primary text-sm"
+          >
+            {syncing ? 'Syncing...' : 'Sync Now'}
+          </button>
+          {(googleStatus.last_sync_at || outlookStatus.last_sync_at) && (
+            <span className="text-xs text-gray-400">
+              Last sync: {new Date(googleStatus.last_sync_at || outlookStatus.last_sync_at || '').toLocaleString()}
+            </span>
+          )}
+        </div>
+        {syncResult && (
+          <p className="text-sm text-green-600 mt-2">{syncResult}</p>
+        )}
       </div>
     </div>
   )

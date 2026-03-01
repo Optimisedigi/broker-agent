@@ -38,14 +38,43 @@ function Meetings() {
   const [transcriptionResult, setTranscriptionResult] = useState<string | null>(null)
   const [recordingError, setRecordingError] = useState<string | null>(null)
   const [whisperReady, setWhisperReady] = useState<boolean | null>(null)
+  const [micTestActive, setMicTestActive] = useState(false)
+  const [micLevel, setMicLevel] = useState(0)
+  const [micTestError, setMicTestError] = useState<string | null>(null)
+
+  // Calendar event state
+  const [calendarProvider, setCalendarProvider] = useState<string | null>(null)
+  const [showCalendarPrompt, setShowCalendarPrompt] = useState(false)
+  const [calendarCreating, setCalendarCreating] = useState(false)
+  const [calendarResult, setCalendarResult] = useState<string | null>(null)
+  const [savedMeetingName, setSavedMeetingName] = useState('')
+  const [savedMeetingEmail, setSavedMeetingEmail] = useState('')
+  const [savedMeetingDuration, setSavedMeetingDuration] = useState(0)
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const micStreamRef = useRef<MediaStream | null>(null)
+  const micAudioCtxRef = useRef<AudioContext | null>(null)
+  const micIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     loadClients()
     loadMeetings()
     checkWhisper()
+    checkCalendarConnection()
+    return () => { stopMicTest() }
   }, [])
+
+  const checkCalendarConnection = async () => {
+    try {
+      const g: any = await invoke('check_oauth_status', { provider: 'google' })
+      if (g.connected) { setCalendarProvider('google'); return }
+      const m: any = await invoke('check_oauth_status', { provider: 'microsoft' })
+      if (m.connected) { setCalendarProvider('microsoft'); return }
+      setCalendarProvider(null)
+    } catch {
+      setCalendarProvider(null)
+    }
+  }
 
   const checkWhisper = async () => {
     try {
@@ -98,9 +127,50 @@ function Meetings() {
     }
   }
 
+  const startMicTest = async () => {
+    setMicTestError(null)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      micStreamRef.current = stream
+      const audioCtx = new AudioContext()
+      micAudioCtxRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
+      setMicTestActive(true)
+      micIntervalRef.current = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray)
+        const avg = dataArray.reduce((sum, v) => sum + v, 0) / dataArray.length
+        setMicLevel(Math.min(100, Math.round((avg / 128) * 100)))
+      }, 80)
+    } catch {
+      setMicTestError('Could not access microphone. Check permissions in System Settings.')
+    }
+  }
+
+  const stopMicTest = () => {
+    if (micIntervalRef.current) {
+      clearInterval(micIntervalRef.current)
+      micIntervalRef.current = null
+    }
+    if (micAudioCtxRef.current) {
+      micAudioCtxRef.current.close()
+      micAudioCtxRef.current = null
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(t => t.stop())
+      micStreamRef.current = null
+    }
+    setMicTestActive(false)
+    setMicLevel(0)
+  }
+
   const handleClientSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!clientName || !clientEmail) return
+    stopMicTest()
 
     setShowClientForm(false)
     setRecordingError(null)
@@ -175,6 +245,14 @@ function Meetings() {
       await loadMeetings()
       await loadClients()
 
+      // Check if calendar is connected and show prompt
+      if (calendarProvider) {
+        setSavedMeetingName(clientName)
+        setSavedMeetingEmail(clientEmail)
+        setSavedMeetingDuration(recordingTime)
+        setShowCalendarPrompt(true)
+      }
+
       setShowSavePrompt(false)
       setRecordingTime(0)
       setClientName('')
@@ -218,6 +296,35 @@ function Meetings() {
     return `${mins}m ${secs}s`
   }
 
+  const handleCreateCalendarEvent = async () => {
+    if (!calendarProvider) return
+    setCalendarCreating(true)
+    setCalendarResult(null)
+    try {
+      const now = new Date()
+      const end = new Date(now.getTime() + (savedMeetingDuration || 3600) * 1000)
+      const link: string = await invoke('create_calendar_event', {
+        provider: calendarProvider,
+        event: {
+          title: `Meeting with ${savedMeetingName}`,
+          start_time: now.toISOString(),
+          end_time: end.toISOString(),
+          attendee_email: savedMeetingEmail || null,
+          description: `Follow-up meeting with ${savedMeetingName}`,
+        },
+      })
+      setCalendarResult(link ? 'Event created!' : 'Event created!')
+      setTimeout(() => {
+        setShowCalendarPrompt(false)
+        setCalendarResult(null)
+      }, 2000)
+    } catch (err: any) {
+      setCalendarResult(`Failed: ${err}`)
+    } finally {
+      setCalendarCreating(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -237,6 +344,42 @@ function Meetings() {
           >
             Dismiss
           </button>
+        </div>
+      )}
+
+      {/* Calendar Event Prompt */}
+      {showCalendarPrompt && (
+        <div className="card bg-green-50 border-green-200">
+          <h3 className="text-lg font-semibold mb-2">Create Calendar Event?</h3>
+          <p className="text-sm text-gray-600 mb-3">
+            Add a follow-up event for <strong>{savedMeetingName}</strong> to your calendar?
+          </p>
+          <div className="bg-white rounded-lg border border-green-200 p-3 mb-4 text-sm space-y-1">
+            <p><span className="font-medium">Title:</span> Meeting with {savedMeetingName}</p>
+            {savedMeetingEmail && <p><span className="font-medium">Attendee:</span> {savedMeetingEmail}</p>}
+            <p><span className="font-medium">Provider:</span> {calendarProvider === 'google' ? 'Google Calendar' : 'Outlook Calendar'}</p>
+          </div>
+          {calendarResult && (
+            <p className={`text-sm mb-3 ${calendarResult.startsWith('Failed') ? 'text-red-600' : 'text-green-600'}`}>
+              {calendarResult}
+            </p>
+          )}
+          <div className="flex gap-3">
+            <button
+              onClick={handleCreateCalendarEvent}
+              disabled={calendarCreating}
+              className="btn-primary"
+            >
+              {calendarCreating ? 'Creating...' : 'Create Event'}
+            </button>
+            <button
+              onClick={() => { setShowCalendarPrompt(false); setCalendarResult(null) }}
+              className="btn-secondary"
+              disabled={calendarCreating}
+            >
+              Skip
+            </button>
+          </div>
         </div>
       )}
 
@@ -402,6 +545,47 @@ function Meetings() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                 </svg>
               </div>
+
+              {/* Mic Check Panel */}
+              <div className="bg-gray-50 rounded-lg p-4 max-w-sm mx-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-medium text-gray-700">Mic Check</span>
+                  <button
+                    onClick={micTestActive ? stopMicTest : startMicTest}
+                    className={`text-xs px-3 py-1 rounded-lg font-medium ${
+                      micTestActive
+                        ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                        : 'bg-primary-100 text-primary-700 hover:bg-primary-200'
+                    }`}
+                  >
+                    {micTestActive ? 'Stop' : 'Test mic'}
+                  </button>
+                </div>
+                {micTestError && (
+                  <p className="text-xs text-red-600 mb-2">{micTestError}</p>
+                )}
+                <div className="flex items-end justify-center gap-[3px] h-10">
+                  {Array.from({ length: 20 }, (_, i) => {
+                    const threshold = (i + 1) * 5
+                    const active = micTestActive && micLevel >= threshold
+                    const barHeight = 6 + i * 1.4
+                    const color = i < 14 ? (active ? 'bg-green-500' : 'bg-green-200')
+                      : i < 18 ? (active ? 'bg-yellow-500' : 'bg-yellow-200')
+                      : (active ? 'bg-red-500' : 'bg-red-200')
+                    return (
+                      <div
+                        key={i}
+                        className={`w-[6px] rounded-sm transition-colors duration-75 ${color}`}
+                        style={{ height: `${barHeight}px` }}
+                      />
+                    )
+                  })}
+                </div>
+                {micTestActive && (
+                  <p className="text-xs text-gray-500 mt-2">Speak now to test your mic</p>
+                )}
+              </div>
+
               <p className="text-gray-600">Ready to record</p>
               <button onClick={startRecording} className="btn-primary">
                 Start Recording

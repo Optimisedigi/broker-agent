@@ -2,7 +2,9 @@ use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+mod oauth;
 
 pub struct AppState {
     db: Mutex<Connection>,
@@ -32,8 +34,20 @@ pub struct Client {
     pub available_deposit: Option<f64>,
     pub monthly_expenses: Option<f64>,
     pub goals: Option<String>,
+    pub home_ownership: Option<String>,
+    pub client_status: String,
+    pub referral_source: Option<String>,
+    pub pipeline_stage: Option<String>,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ReferralStat {
+    pub source: String,
+    pub count: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -95,6 +109,35 @@ pub struct EmailImport {
     pub document_path: String,
     pub imported_at: String,
     pub processed: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Deal {
+    pub id: Option<i64>,
+    pub client_id: i64,
+    pub property_address: String,
+    pub loan_amount: Option<f64>,
+    pub purchase_date: Option<String>,
+    pub settlement_date: Option<String>,
+    pub interest_rate: Option<f64>,
+    pub lender_name: Option<String>,
+    pub loan_type: Option<String>,
+    pub status: String,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DealEvent {
+    pub id: Option<i64>,
+    pub deal_id: i64,
+    pub event_type: String,
+    pub event_date: String,
+    pub description: Option<String>,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub created_at: String,
 }
 
 // Database initialization
@@ -214,8 +257,18 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
     let _ = conn.execute("ALTER TABLE clients ADD COLUMN monthly_expenses REAL", []);
     let _ = conn.execute("ALTER TABLE clients ADD COLUMN goals TEXT", []);
 
+    // Migration: add client_status to clients
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN client_status TEXT DEFAULT 'existing'", []);
+
     // Migration: add file_data to documents for preview
     let _ = conn.execute("ALTER TABLE documents ADD COLUMN file_data TEXT", []);
+
+    // Migration: add home_ownership to clients
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN home_ownership TEXT DEFAULT 'owned'", []);
+
+    // Migration: add referral_source and pipeline_stage to clients
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN referral_source TEXT DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN pipeline_stage TEXT DEFAULT 'lead_received'", []);
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS proposals (
@@ -231,6 +284,57 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS deals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            property_address TEXT NOT NULL,
+            loan_amount REAL,
+            purchase_date TEXT,
+            settlement_date TEXT,
+            interest_rate REAL,
+            lender_name TEXT,
+            loan_type TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (client_id) REFERENCES clients(id)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS deal_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deal_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            description TEXT,
+            old_value TEXT,
+            new_value TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (deal_id) REFERENCES deals(id)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS oauth_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL UNIQUE,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            expires_at TEXT NOT NULL,
+            account_email TEXT,
+            scopes TEXT,
+            last_sync_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
     // Seed dummy data if no clients exist
     let client_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0))
@@ -239,8 +343,8 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
     if client_count == 0 {
         // Insert dummy client: Sarah Mitchell
         conn.execute(
-            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             [
                 "Sarah", "Mitchell",
                 "sarah.mitchell@email.com", "0412 345 678",
@@ -251,6 +355,9 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
                 "23 Rose Bay Ave, Rose Bay NSW 2029\n17 Coogee Bay Rd, Coogee NSW 2034",
                 "320000", "6500",
                 "Year 2: Acquire third investment property in Eastern Suburbs\nYear 5: Portfolio of 5 properties generating $150K+ passive income\nYear 10: Semi-retire with $3M+ equity across portfolio",
+                "existing",
+                "Referral",
+                "post_settlement_review",
                 "2022-03-15T10:00:00+11:00",
                 "2026-02-20T14:30:00+11:00",
             ],
@@ -335,6 +442,78 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
         }
     }
 
+    // Seed dummy deals if none exist
+    let deal_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM deals", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    if deal_count == 0 && client_count > 0 {
+        let sarah_id: i64 = conn
+            .query_row("SELECT id FROM clients WHERE first_name = 'Sarah' AND last_name = 'Mitchell'", [], |row| row.get(0))
+            .unwrap_or(1);
+
+        // Deal 1: Bondi investment property
+        conn.execute(
+            "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                sarah_id, "15 Ocean Ave, Bondi NSW 2026", 780000.0,
+                "2022-04-10", "2022-06-20", 3.89,
+                "Commonwealth Bank", "fixed", "active",
+                "First investment property. 2-year fixed rate. LVR 78%.",
+                "2022-06-20T14:00:00+10:00", "2024-03-15T10:00:00+11:00"
+            ],
+        )?;
+        let deal1_id = conn.last_insert_rowid();
+
+        // Deal 1 events
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal1_id, "purchase", "2022-04-10", "Contract exchanged for 15 Ocean Ave, Bondi", "", "$780,000", "2022-04-10T10:00:00+10:00"],
+        )?;
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal1_id, "settlement", "2022-06-20", "Settlement completed through CBA", "", "Settled", "2022-06-20T14:00:00+10:00"],
+        )?;
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal1_id, "rate_change", "2024-04-10", "Fixed period expired, rolled to variable rate", "3.89%", "6.49%", "2024-04-10T09:00:00+10:00"],
+        )?;
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal1_id, "refinance", "2024-06-01", "Refinanced to ANZ for better investor rate", "CBA 6.49%", "ANZ 5.99%", "2024-06-01T11:00:00+10:00"],
+        )?;
+
+        // Deal 2: North Sydney unit
+        conn.execute(
+            "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                sarah_id, "8/120 Pacific Hwy, North Sydney NSW 2060", 820000.0,
+                "2024-09-15", "2024-11-20", 5.89,
+                "Westpac", "variable", "active",
+                "Second investment property. Used equity from Bondi property.",
+                "2024-11-20T10:00:00+11:00", "2024-11-20T10:00:00+11:00"
+            ],
+        )?;
+        let deal2_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal2_id, "purchase", "2024-09-15", "Contract exchanged for 8/120 Pacific Hwy, North Sydney", "", "$820,000", "2024-09-15T10:00:00+10:00"],
+        )?;
+        conn.execute(
+            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![deal2_id, "settlement", "2024-11-20", "Settlement completed through Westpac Premier Advantage", "", "Settled", "2024-11-20T10:00:00+11:00"],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -343,8 +522,19 @@ fn init_db(conn: &Connection) -> SqliteResult<()> {
 fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, created_at, updated_at FROM clients ORDER BY created_at DESC")
+        .prepare("SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at FROM clients ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
+
+    // Helper: read a column that may be stored as REAL or TEXT
+    fn get_opt_f64(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<f64>> {
+        match row.get::<_, Option<f64>>(idx) {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                let s: Option<String> = row.get(idx)?;
+                Ok(s.and_then(|s| s.parse::<f64>().ok()))
+            }
+        }
+    }
 
     let clients = stmt
         .query_map([], |row| {
@@ -354,19 +544,23 @@ fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
                 last_name: row.get(2)?,
                 email: row.get(3)?,
                 phone: row.get(4)?,
-                income: row.get(5)?,
-                payg: row.get(6)?,
-                assets: row.get(7)?,
-                liabilities: row.get(8)?,
+                income: get_opt_f64(row, 5)?,
+                payg: get_opt_f64(row, 6)?,
+                assets: get_opt_f64(row, 7)?,
+                liabilities: get_opt_f64(row, 8)?,
                 notes: row.get(9)?,
                 home_address: row.get(10)?,
                 investment_addresses: row.get(11)?,
                 properties_viewing: row.get(12)?,
-                available_deposit: row.get(13)?,
-                monthly_expenses: row.get(14)?,
+                available_deposit: get_opt_f64(row, 13)?,
+                monthly_expenses: get_opt_f64(row, 14)?,
                 goals: row.get(15)?,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
+                home_ownership: row.get(16)?,
+                client_status: row.get::<_, Option<String>>(17)?.unwrap_or_else(|| "existing".to_string()),
+                referral_source: row.get(18)?,
+                pipeline_stage: row.get(19)?,
+                created_at: row.get(20)?,
+                updated_at: row.get(21)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -382,31 +576,92 @@ fn create_client(state: State<AppState>, client: Client) -> Result<i64, String> 
     let now = chrono::Local::now().to_rfc3339();
 
     conn.execute(
-        "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-        [
-            &client.first_name,
-            &client.last_name,
-            &client.email,
-            &client.phone,
-            &client.income.map(|v| v.to_string()).unwrap_or_default(),
-            &client.payg.map(|v| v.to_string()).unwrap_or_default(),
-            &client.assets.map(|v| v.to_string()).unwrap_or_default(),
-            &client.liabilities.map(|v| v.to_string()).unwrap_or_default(),
-            &client.notes,
-            &client.home_address.clone().unwrap_or_default(),
-            &client.investment_addresses.clone().unwrap_or_default(),
-            &client.properties_viewing.clone().unwrap_or_default(),
-            &client.available_deposit.map(|v| v.to_string()).unwrap_or_default(),
-            &client.monthly_expenses.map(|v| v.to_string()).unwrap_or_default(),
-            &client.goals.clone().unwrap_or_default(),
-            &now,
-            &now,
+        "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        rusqlite::params![
+            client.first_name,
+            client.last_name,
+            client.email,
+            client.phone,
+            client.income,
+            client.payg,
+            client.assets,
+            client.liabilities,
+            client.notes,
+            client.home_address.clone().unwrap_or_default(),
+            client.investment_addresses.clone().unwrap_or_default(),
+            client.properties_viewing.clone().unwrap_or_default(),
+            client.available_deposit,
+            client.monthly_expenses,
+            client.goals.clone(),
+            client.home_ownership.clone().unwrap_or_else(|| "owned".to_string()),
+            client.client_status,
+            client.referral_source.clone().unwrap_or_default(),
+            client.pipeline_stage.clone().unwrap_or_else(|| "lead_received".to_string()),
+            now,
+            now,
         ],
     )
     .map_err(|e| e.to_string())?;
 
     Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+fn update_client(state: State<AppState>, client: Client) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().to_rfc3339();
+    let client_id = client.id.ok_or("Client ID is required for update")?;
+
+    conn.execute(
+        "UPDATE clients SET first_name = ?1, last_name = ?2, email = ?3, phone = ?4, income = ?5, payg = ?6, assets = ?7, liabilities = ?8, notes = ?9, home_address = ?10, investment_addresses = ?11, properties_viewing = ?12, available_deposit = ?13, monthly_expenses = ?14, goals = ?15, home_ownership = ?16, client_status = ?17, referral_source = ?18, pipeline_stage = ?19, updated_at = ?20 WHERE id = ?21",
+        rusqlite::params![
+            client.first_name,
+            client.last_name,
+            client.email,
+            client.phone,
+            client.income,
+            client.payg,
+            client.assets,
+            client.liabilities,
+            client.notes,
+            client.home_address.clone().unwrap_or_default(),
+            client.investment_addresses.clone().unwrap_or_default(),
+            client.properties_viewing.clone().unwrap_or_default(),
+            client.available_deposit,
+            client.monthly_expenses,
+            client.goals.clone(),
+            client.home_ownership.clone().unwrap_or_else(|| "owned".to_string()),
+            client.client_status,
+            client.referral_source.clone().unwrap_or_default(),
+            client.pipeline_stage.clone().unwrap_or_else(|| "lead_received".to_string()),
+            now,
+            client_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_client(state: State<AppState>, client_id: i64) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM deal_events WHERE deal_id IN (SELECT id FROM deals WHERE client_id = ?1)", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM deals WHERE client_id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM documents WHERE client_id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM meetings WHERE client_id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM email_imports WHERE client_id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM proposals WHERE client_id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM clients WHERE id = ?1", [client_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -490,6 +745,138 @@ fn get_dashboard_stats(state: State<AppState>) -> Result<serde_json::Value, Stri
     }))
 }
 
+#[tauri::command]
+fn get_referral_stats(state: State<AppState>) -> Result<Vec<ReferralStat>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT referral_source, COUNT(*) as count FROM clients WHERE referral_source != '' GROUP BY referral_source ORDER BY count DESC")
+        .map_err(|e| e.to_string())?;
+
+    let stats = stmt
+        .query_map([], |row| {
+            Ok(ReferralStat {
+                source: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(stats)
+}
+
+// Deal commands
+#[tauri::command]
+fn get_client_deals(state: State<AppState>, client_id: i64) -> Result<Vec<Deal>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at FROM deals WHERE client_id = ?1 ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
+
+    let deals = stmt
+        .query_map([client_id], |row| {
+            Ok(Deal {
+                id: row.get(0)?,
+                client_id: row.get(1)?,
+                property_address: row.get(2)?,
+                loan_amount: row.get(3)?,
+                purchase_date: row.get(4)?,
+                settlement_date: row.get(5)?,
+                interest_rate: row.get(6)?,
+                lender_name: row.get(7)?,
+                loan_type: row.get(8)?,
+                status: row.get(9)?,
+                notes: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(deals)
+}
+
+#[tauri::command]
+fn create_deal(state: State<AppState>, deal: Deal) -> Result<i64, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().to_rfc3339();
+
+    conn.execute(
+        "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            deal.client_id,
+            deal.property_address,
+            deal.loan_amount,
+            deal.purchase_date,
+            deal.settlement_date,
+            deal.interest_rate,
+            deal.lender_name,
+            deal.loan_type,
+            deal.status,
+            deal.notes,
+            now,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+fn get_deal_events(state: State<AppState>, deal_id: i64) -> Result<Vec<DealEvent>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, deal_id, event_type, event_date, description, old_value, new_value, created_at FROM deal_events WHERE deal_id = ?1 ORDER BY event_date DESC")
+        .map_err(|e| e.to_string())?;
+
+    let events = stmt
+        .query_map([deal_id], |row| {
+            Ok(DealEvent {
+                id: row.get(0)?,
+                deal_id: row.get(1)?,
+                event_type: row.get(2)?,
+                event_date: row.get(3)?,
+                description: row.get(4)?,
+                old_value: row.get(5)?,
+                new_value: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(events)
+}
+
+#[tauri::command]
+fn create_deal_event(state: State<AppState>, event: DealEvent) -> Result<i64, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Local::now().to_rfc3339();
+
+    conn.execute(
+        "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            event.deal_id,
+            event.event_type,
+            event.event_date,
+            event.description,
+            event.old_value,
+            event.new_value,
+            now,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(conn.last_insert_rowid())
+}
+
 // Meeting commands
 #[tauri::command]
 fn save_meeting(state: State<AppState>, meeting: Meeting) -> Result<i64, String> {
@@ -514,12 +901,12 @@ fn save_meeting(state: State<AppState>, meeting: Meeting) -> Result<i64, String>
             let last_name = names.get(1..).unwrap_or(&[]).join(" ");
 
             conn.execute(
-                "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
-                [
-                    &first_name,
-                    &last_name,
-                    &meeting.client_email,
+                "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, NULL, ?13, ?14, ?15)",
+                rusqlite::params![
+                    first_name,
+                    last_name,
+                    meeting.client_email,
                     "",
                     "",
                     "",
@@ -529,11 +916,9 @@ fn save_meeting(state: State<AppState>, meeting: Meeting) -> Result<i64, String>
                     "",
                     "",
                     "",
-                    "",
-                    "",
-                    "",
-                    &now,
-                    &now,
+                    "new",
+                    now,
+                    now,
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -636,7 +1021,7 @@ fn find_client_by_email(state: State<AppState>, email: String) -> Result<Option<
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
     let result = conn.query_row(
-        "SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, created_at, updated_at
+        "SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at
          FROM clients WHERE email = ?1",
         [&email],
         |row| {
@@ -657,8 +1042,12 @@ fn find_client_by_email(state: State<AppState>, email: String) -> Result<Option<
                 available_deposit: row.get(13)?,
                 monthly_expenses: row.get(14)?,
                 goals: row.get(15)?,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
+                home_ownership: row.get(16)?,
+                client_status: row.get::<_, Option<String>>(17)?.unwrap_or_else(|| "existing".to_string()),
+                referral_source: row.get(18)?,
+                pipeline_stage: row.get(19)?,
+                created_at: row.get(20)?,
+                updated_at: row.get(21)?,
             })
         },
     );
@@ -671,19 +1060,65 @@ fn find_client_by_email(state: State<AppState>, email: String) -> Result<Option<
 }
 
 #[tauri::command]
-fn import_email_document(
-    state: State<AppState>,
-    sender_email: String,
-    subject: String,
-    document_path: String,
-) -> Result<i64, String> {
+fn update_client_status(state: State<AppState>, client_id: i64, status: String) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE clients SET client_status = ?1 WHERE id = ?2",
+        rusqlite::params![status, client_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
-    // Find client by sender email
+/// Classify a document type based on filename and email subject.
+/// Returns one of: "payslip", "bank_statement", "id_document", or "other".
+pub fn classify_document_type<'a>(filename: &str, subject: &str) -> &'a str {
+    let fname_lower = filename.to_lowercase();
+    let subj_lower = subject.to_lowercase();
+
+    if fname_lower.contains("payslip") || subj_lower.contains("payslip") {
+        "payslip"
+    } else if fname_lower.contains("bank")
+        || subj_lower.contains("bank")
+        || fname_lower.contains("statement")
+    {
+        "bank_statement"
+    } else if fname_lower.contains("id")
+        || fname_lower.contains("license")
+        || fname_lower.contains("passport")
+    {
+        "id_document"
+    } else {
+        "other"
+    }
+}
+
+/// Detect MIME type from a file extension string.
+/// Returns the MIME type as a static string.
+pub fn detect_mime_type(extension: &str) -> &'static str {
+    match extension.to_lowercase().as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Shared import logic used by both the Tauri command and OAuth email sync.
+pub fn do_import_email_document(
+    conn: &Connection,
+    sender_email: &str,
+    subject: &str,
+    document_path: &str,
+) -> Result<i64, String> {
     let client_id: Option<i64> = conn
         .query_row(
             "SELECT id FROM clients WHERE email = ?1",
-            [&sender_email],
+            [sender_email],
             |row| row.get(0),
         )
         .ok();
@@ -695,35 +1130,38 @@ fn import_email_document(
         }
     };
 
-    // Determine document type from subject/filename
-    let document_type = if subject.to_lowercase().contains("payslip")
-        || document_path.to_lowercase().contains("payslip")
-    {
-        "payslip"
-    } else if subject.to_lowercase().contains("bank")
-        || document_path.to_lowercase().contains("statement")
-    {
-        "bank_statement"
-    } else if subject.to_lowercase().contains("id")
-        || document_path.to_lowercase().contains("license")
-        || document_path.to_lowercase().contains("passport")
-    {
-        "id_document"
-    } else {
-        "other"
+    // Use actual filename from path, not subject
+    let filename = std::path::Path::new(document_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| subject.to_string());
+
+    let document_type = classify_document_type(&filename, subject);
+
+    // Read file data as base64 for in-app preview
+    let file_data = match std::fs::read(document_path) {
+        Ok(bytes) => {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            let ext = std::path::Path::new(document_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let mime = detect_mime_type(ext);
+            format!("data:{};base64,{}", mime, STANDARD.encode(&bytes))
+        }
+        Err(_) => String::new(),
     };
 
-    // Insert into documents table
     let now = chrono::Local::now().to_rfc3339();
     conn.execute(
         "INSERT INTO documents (client_id, filename, document_type, file_path, file_data, uploaded_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         [
             &client_id.to_string(),
-            &subject,
+            &filename,
             document_type,
-            &document_path,
-            "",
+            document_path,
+            &file_data,
             &now,
         ],
     )
@@ -731,21 +1169,31 @@ fn import_email_document(
 
     let document_id = conn.last_insert_rowid();
 
-    // Log the email import
     conn.execute(
         "INSERT INTO email_imports (client_id, sender_email, subject, document_path, imported_at, processed)
          VALUES (?1, ?2, ?3, ?4, ?5, 1)",
         [
             &client_id.to_string(),
-            &sender_email,
-            &subject,
-            &document_path,
+            sender_email,
+            subject,
+            document_path,
             &now,
         ],
     )
     .map_err(|e| e.to_string())?;
 
     Ok(document_id)
+}
+
+#[tauri::command]
+fn import_email_document(
+    state: State<AppState>,
+    sender_email: String,
+    subject: String,
+    document_path: String,
+) -> Result<i64, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    do_import_email_document(&conn, &sender_email, &subject, &document_path)
 }
 
 #[tauri::command]
@@ -847,6 +1295,41 @@ fn get_document_data(state: State<AppState>, document_id: i64) -> Result<Option<
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).exists() {
+        return Err("File not found on disk".to_string());
+    }
+    open::that(&path).map_err(|e| format!("Failed to open file: {}", e))
+}
+
+#[tauri::command]
+fn rename_document(state: State<AppState>, document_id: i64, new_name: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE documents SET filename = ?1 WHERE id = ?2",
+        rusqlite::params![new_name, document_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_document(state: State<AppState>, document_id: i64) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // Get file path to delete from disk too
+    let file_path: Option<String> = conn
+        .query_row("SELECT file_path FROM documents WHERE id = ?1", [document_id], |row| row.get(0))
+        .ok();
+    conn.execute("DELETE FROM documents WHERE id = ?1", [document_id])
+        .map_err(|e| e.to_string())?;
+    // Try to delete file from disk
+    if let Some(path) = file_path {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1136,24 +1619,106 @@ fn stop_recording(recording: State<RecordingState>) -> Result<Vec<u8>, String> {
     Ok(wav_data)
 }
 
-// Whisper model - bundled with the app
-fn get_bundled_model_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .resolve("resources/ggml-base.bin", tauri::path::BaseDirectory::Resource)
-        .map_err(|e| format!("Failed to resolve bundled model path: {}", e))
+// Whisper model - downloaded on first use to app data directory
+const WHISPER_MODEL_FILENAME: &str = "ggml-large-v3.bin";
+const WHISPER_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin";
+
+fn get_model_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::data_dir()
+        .ok_or("Failed to get data directory")?
+        .join("BrokerageCRM");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn get_model_path() -> Result<std::path::PathBuf, String> {
+    Ok(get_model_dir()?.join(WHISPER_MODEL_FILENAME))
 }
 
 #[tauri::command]
-fn check_whisper_model(app: AppHandle) -> Result<bool, String> {
-    let path = get_bundled_model_path(&app)?;
+fn check_whisper_model() -> Result<bool, String> {
+    let path = get_model_path()?;
     Ok(path.exists())
 }
 
 #[tauri::command]
-fn transcribe_audio(audio_data: Vec<u8>, app: AppHandle) -> Result<String, String> {
-    let model_path = get_bundled_model_path(&app)?;
+fn get_whisper_model_status() -> Result<serde_json::Value, String> {
+    let path = get_model_path()?;
+    let exists = path.exists();
+    let size = if exists {
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    Ok(serde_json::json!({
+        "downloaded": exists,
+        "model_name": WHISPER_MODEL_FILENAME,
+        "size_bytes": size,
+        "path": path.to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
+async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
+    let model_path = get_model_path()?;
+    if model_path.exists() {
+        return Ok("Model already downloaded".to_string());
+    }
+
+    let temp_path = model_path.with_extension("bin.downloading");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(WHISPER_MODEL_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Download request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Download failed with status: {}", resp.status()));
+    }
+
+    let total_size = resp.content_length().unwrap_or(0);
+
+    let mut file = std::fs::File::create(&temp_path)
+        .map_err(|e| format!("Failed to create file: {}", e))?;
+
+    use std::io::Write;
+    let mut downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Download error: {}", e))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Write error: {}", e))?;
+        downloaded += chunk.len() as u64;
+
+        // Emit progress event
+        if total_size > 0 {
+            let pct = (downloaded as f64 / total_size as f64 * 100.0) as u32;
+            let _ = app.emit("whisper-download-progress", serde_json::json!({
+                "downloaded": downloaded,
+                "total": total_size,
+                "percent": pct,
+            }));
+        }
+    }
+
+    drop(file);
+
+    // Rename temp file to final path
+    std::fs::rename(&temp_path, &model_path)
+        .map_err(|e| format!("Failed to finalize download: {}", e))?;
+
+    Ok("Download complete".to_string())
+}
+
+#[tauri::command]
+fn transcribe_audio(audio_data: Vec<u8>) -> Result<String, String> {
+    let model_path = get_model_path()?;
     if !model_path.exists() {
-        return Err("Whisper model not found in app bundle.".to_string());
+        return Err("Whisper model not downloaded. Go to Settings to download it.".to_string());
     }
 
     // Parse WAV file
@@ -1251,25 +1816,206 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_clients,
             create_client,
+            update_client,
+            delete_client,
             get_bank_policies,
             create_bank_policy,
             get_dashboard_stats,
+            get_referral_stats,
+            get_client_deals,
+            create_deal,
+            get_deal_events,
+            create_deal_event,
             save_meeting,
             get_meetings,
             get_client_meetings,
             find_client_by_email,
+            update_client_status,
             import_email_document,
             get_recent_email_imports,
             get_client_documents,
             upload_client_document,
             get_document_data,
+            open_file,
+            rename_document,
+            delete_document,
             get_broker_profile,
             save_broker_profile,
             start_recording,
             stop_recording,
             check_whisper_model,
-            transcribe_audio
+            get_whisper_model_status,
+            download_whisper_model,
+            transcribe_audio,
+            oauth::start_oauth,
+            oauth::check_oauth_status,
+            oauth::disconnect_oauth,
+            oauth::sync_emails,
+            oauth::create_calendar_event,
+            oauth::get_upcoming_meetings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // classify_document_type tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_payslip_by_filename() {
+        assert_eq!(classify_document_type("payslip_march.pdf", ""), "payslip");
+    }
+
+    #[test]
+    fn classify_bank_statement_by_filename() {
+        assert_eq!(
+            classify_document_type("bank_statement_2024.pdf", ""),
+            "bank_statement"
+        );
+    }
+
+    #[test]
+    fn classify_statement_keyword_in_filename() {
+        assert_eq!(
+            classify_document_type("statement_jan.pdf", ""),
+            "bank_statement"
+        );
+    }
+
+    #[test]
+    fn classify_drivers_license_as_id_document() {
+        assert_eq!(
+            classify_document_type("drivers_license.jpg", ""),
+            "id_document"
+        );
+    }
+
+    #[test]
+    fn classify_passport_as_id_document() {
+        assert_eq!(
+            classify_document_type("passport_scan.png", ""),
+            "id_document"
+        );
+    }
+
+    #[test]
+    fn classify_generic_filename_as_other() {
+        assert_eq!(classify_document_type("random_doc.pdf", ""), "other");
+    }
+
+    #[test]
+    fn classify_payslip_from_subject_with_generic_filename() {
+        assert_eq!(
+            classify_document_type("attachment.pdf", "Your payslip for March"),
+            "payslip"
+        );
+    }
+
+    #[test]
+    fn classify_bank_from_subject() {
+        assert_eq!(
+            classify_document_type("document.pdf", "Bank correspondence"),
+            "bank_statement"
+        );
+    }
+
+    #[test]
+    fn classify_case_insensitive_filename() {
+        assert_eq!(classify_document_type("PAYSLIP_MARCH.PDF", ""), "payslip");
+        assert_eq!(
+            classify_document_type("Bank_Statement.pdf", ""),
+            "bank_statement"
+        );
+        assert_eq!(
+            classify_document_type("PASSPORT_scan.PNG", ""),
+            "id_document"
+        );
+    }
+
+    #[test]
+    fn classify_case_insensitive_subject() {
+        assert_eq!(
+            classify_document_type("file.pdf", "PAYSLIP for employee"),
+            "payslip"
+        );
+        assert_eq!(
+            classify_document_type("file.pdf", "BANK statement enclosed"),
+            "bank_statement"
+        );
+    }
+
+    #[test]
+    fn classify_id_keyword_in_filename() {
+        // "id" is a substring match, so filenames containing "id" match
+        assert_eq!(classify_document_type("national_id.pdf", ""), "id_document");
+    }
+
+    // -----------------------------------------------------------------------
+    // detect_mime_type tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mime_pdf() {
+        assert_eq!(detect_mime_type("pdf"), "application/pdf");
+    }
+
+    #[test]
+    fn mime_png() {
+        assert_eq!(detect_mime_type("png"), "image/png");
+    }
+
+    #[test]
+    fn mime_jpg() {
+        assert_eq!(detect_mime_type("jpg"), "image/jpeg");
+    }
+
+    #[test]
+    fn mime_jpeg() {
+        assert_eq!(detect_mime_type("jpeg"), "image/jpeg");
+    }
+
+    #[test]
+    fn mime_doc() {
+        assert_eq!(detect_mime_type("doc"), "application/msword");
+    }
+
+    #[test]
+    fn mime_docx() {
+        assert_eq!(
+            detect_mime_type("docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+    }
+
+    #[test]
+    fn mime_xls() {
+        assert_eq!(detect_mime_type("xls"), "application/vnd.ms-excel");
+    }
+
+    #[test]
+    fn mime_xlsx() {
+        assert_eq!(
+            detect_mime_type("xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+    }
+
+    #[test]
+    fn mime_unknown_extension() {
+        assert_eq!(detect_mime_type("zip"), "application/octet-stream");
+        assert_eq!(detect_mime_type("txt"), "application/octet-stream");
+        assert_eq!(detect_mime_type(""), "application/octet-stream");
+    }
+
+    #[test]
+    fn mime_case_insensitive() {
+        assert_eq!(detect_mime_type("PDF"), "application/pdf");
+        assert_eq!(detect_mime_type("Png"), "image/png");
+        assert_eq!(detect_mime_type("JPG"), "image/jpeg");
+    }
 }

@@ -1,0 +1,1291 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use rand::Rng;
+use reqwest::Client as HttpClient;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::{BufRead, BufReader, Write};
+use tauri::State;
+use tokio::net::TcpListener;
+
+use crate::AppState;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+// Replace these with your real OAuth client IDs
+const GOOGLE_CLIENT_ID: &str = "706581607048-l3vj1b0gg3v7gt2b7ge5300dd76f92rf.apps.googleusercontent.com";
+const GOOGLE_CLIENT_SECRET: &str = "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";
+const MICROSOFT_CLIENT_ID: &str = "e01aaedb-6e8b-4bbf-8220-a512eaed8956";
+
+const REDIRECT_URI: &str = "http://localhost:9876/callback";
+
+const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
+const GOOGLE_SCOPES: &str = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
+
+const MICROSOFT_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const MICROSOFT_SCOPES: &str = "Mail.Read Calendars.ReadWrite offline_access User.Read";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OAuthStatus {
+    pub connected: bool,
+    pub provider: String,
+    pub account_email: Option<String>,
+    pub last_sync_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CalendarEvent {
+    pub title: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub attendee_email: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SyncResult {
+    pub imported_count: usize,
+    pub documents: Vec<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: u64,
+    #[serde(default)]
+    token_type: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct GoogleUserInfo {
+    email: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct MicrosoftUserInfo {
+    #[serde(rename = "mail", default)]
+    mail: Option<String>,
+    #[serde(rename = "userPrincipalName", default)]
+    user_principal_name: Option<String>,
+}
+
+// Gmail API types
+#[derive(Deserialize, Debug)]
+struct GmailMessageList {
+    messages: Option<Vec<GmailMessageRef>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailMessageRef {
+    id: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailMessage {
+    id: String,
+    payload: Option<GmailPayload>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailPayload {
+    headers: Option<Vec<GmailHeader>>,
+    parts: Option<Vec<GmailPart>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailHeader {
+    name: String,
+    value: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailPart {
+    filename: Option<String>,
+    #[serde(rename = "mimeType")]
+    mime_type: Option<String>,
+    body: Option<GmailBody>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailBody {
+    #[serde(rename = "attachmentId")]
+    attachment_id: Option<String>,
+    data: Option<String>,
+    size: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GmailAttachment {
+    data: String,
+}
+
+// Microsoft Graph types
+#[derive(Deserialize, Debug)]
+struct GraphMessageList {
+    value: Vec<GraphMessage>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphMessage {
+    id: String,
+    subject: Option<String>,
+    from: Option<GraphFrom>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphFrom {
+    #[serde(rename = "emailAddress")]
+    email_address: GraphEmailAddress,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphEmailAddress {
+    address: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphAttachmentList {
+    value: Vec<GraphAttachment>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphAttachment {
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
+    name: Option<String>,
+    #[serde(rename = "contentBytes", default)]
+    content_bytes: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// PKCE helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) fn generate_pkce() -> (String, String) {
+    let mut rng = rand::thread_rng();
+    let verifier: String = (0..64)
+        .map(|_| {
+            let idx = rng.gen_range(0..62);
+            let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+            chars[idx] as char
+        })
+        .collect();
+
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    (verifier, challenge)
+}
+
+// ---------------------------------------------------------------------------
+// Local callback server — waits for the OAuth redirect
+// ---------------------------------------------------------------------------
+
+async fn wait_for_callback() -> Result<String, String> {
+    let listener = TcpListener::bind("127.0.0.1:9876")
+        .await
+        .map_err(|e| format!("Failed to bind callback server: {}", e))?;
+
+    let (stream, _) = listener
+        .accept()
+        .await
+        .map_err(|e| format!("Failed to accept connection: {}", e))?;
+
+    // Convert to std for synchronous line reading
+    let std_stream = stream
+        .into_std()
+        .map_err(|e| format!("Failed to convert stream: {}", e))?;
+    std_stream
+        .set_nonblocking(false)
+        .map_err(|e| format!("Failed to set blocking: {}", e))?;
+
+    let mut reader = BufReader::new(&std_stream);
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .map_err(|e| format!("Failed to read request: {}", e))?;
+
+    eprintln!("[OAuth] Callback request: {}", request_line.trim());
+
+    // Send response
+    let response_body = "<html><body><h2>Connected!</h2><p>You can close this window and return to Broker Agent.</p></body></html>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    );
+
+    let mut writer = &std_stream;
+    let _ = writer.write_all(response.as_bytes());
+    let _ = writer.flush();
+
+    // Parse auth code from GET /callback?code=...
+    let code = request_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|path| url::Url::parse(&format!("http://localhost{}", path)).ok())
+        .and_then(|url| {
+            url.query_pairs()
+                .find(|(k, _)| k == "code")
+                .map(|(_, v)| v.to_string())
+        })
+        .ok_or_else(|| "No auth code in callback".to_string())?;
+
+    Ok(code)
+}
+
+// ---------------------------------------------------------------------------
+// Token management
+// ---------------------------------------------------------------------------
+
+async fn get_valid_token(
+    state: &State<'_, AppState>,
+    provider: &str,
+) -> Result<String, String> {
+    // Read token info (short lock, released before await)
+    let (access_token, refresh_token, expires_at) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT access_token, refresh_token, expires_at FROM oauth_tokens WHERE provider = ?1",
+            [provider],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| format!("No token for {}", provider))?
+    };
+
+    // Check if token is still valid (5 min buffer)
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(&expires_at).map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now();
+    let buffer = chrono::Duration::minutes(5);
+
+    if now + buffer < expires {
+        return Ok(access_token);
+    }
+
+    // Token expired — refresh using async HTTP (no lock held)
+    let refresh_token = refresh_token.ok_or("No refresh token available")?;
+
+    let (token_url, client_id) = match provider {
+        "google" => (GOOGLE_TOKEN_URL, GOOGLE_CLIENT_ID),
+        "microsoft" => (MICROSOFT_TOKEN_URL, MICROSOFT_CLIENT_ID),
+        _ => return Err("Unknown provider".to_string()),
+    };
+
+    let http = HttpClient::new();
+    let mut form_params: Vec<(&str, &str)> = vec![
+        ("client_id", client_id),
+        ("refresh_token", &refresh_token),
+        ("grant_type", "refresh_token"),
+    ];
+    if provider == "google" {
+        form_params.push(("client_secret", GOOGLE_CLIENT_SECRET));
+    }
+
+    let resp = http
+        .post(token_url)
+        .form(&form_params)
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?;
+
+    let token_resp: TokenResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
+
+    let new_expires = chrono::Utc::now()
+        + chrono::Duration::seconds(token_resp.expires_in as i64);
+    let now_str = chrono::Local::now().to_rfc3339();
+
+    // Update DB (short lock)
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE oauth_tokens SET access_token = ?1, expires_at = ?2, updated_at = ?3 WHERE provider = ?4",
+            rusqlite::params![
+                token_resp.access_token,
+                new_expires.to_rfc3339(),
+                now_str,
+                provider,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(token_resp.access_token)
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_oauth(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<OAuthStatus, String> {
+    let (verifier, challenge) = generate_pkce();
+
+    let (auth_url_base, client_id, scopes) = match provider.as_str() {
+        "google" => (GOOGLE_AUTH_URL, GOOGLE_CLIENT_ID, GOOGLE_SCOPES),
+        "microsoft" => (MICROSOFT_AUTH_URL, MICROSOFT_CLIENT_ID, MICROSOFT_SCOPES),
+        _ => return Err("Unknown provider".to_string()),
+    };
+
+    let mut auth_url = url::Url::parse(auth_url_base).map_err(|e| e.to_string())?;
+    auth_url.query_pairs_mut()
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", REDIRECT_URI)
+        .append_pair("response_type", "code")
+        .append_pair("scope", scopes)
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("access_type", "offline")
+        .append_pair("prompt", "consent");
+
+    // Open browser
+    eprintln!("[OAuth] Opening browser for {} auth", provider);
+    open::that(auth_url.as_str()).map_err(|e| format!("Failed to open browser: {}", e))?;
+
+    // Wait for callback
+    eprintln!("[OAuth] Waiting for callback on port 9876...");
+    let code = wait_for_callback().await?;
+    eprintln!("[OAuth] Got auth code: {}...", &code[..code.len().min(10)]);
+
+    // Exchange code for tokens
+    let (token_url, token_client_id) = match provider.as_str() {
+        "google" => (GOOGLE_TOKEN_URL, GOOGLE_CLIENT_ID),
+        "microsoft" => (MICROSOFT_TOKEN_URL, MICROSOFT_CLIENT_ID),
+        _ => return Err("Unknown provider".to_string()),
+    };
+
+    let http = HttpClient::new();
+    let mut form_params: Vec<(&str, &str)> = vec![
+        ("client_id", token_client_id),
+        ("code", code.as_str()),
+        ("redirect_uri", REDIRECT_URI),
+        ("grant_type", "authorization_code"),
+        ("code_verifier", verifier.as_str()),
+    ];
+    if provider == "google" {
+        form_params.push(("client_secret", GOOGLE_CLIENT_SECRET));
+    }
+    let resp = http
+        .post(token_url)
+        .form(&form_params)
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?;
+
+    let resp_text = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
+    eprintln!("[OAuth] Token response: {}", &resp_text[..resp_text.len().min(500)]);
+
+    let token_resp: TokenResponse = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+
+    // Fetch account email
+    let account_email = match provider.as_str() {
+        "google" => {
+            let resp_text = http
+                .get(GOOGLE_USERINFO_URL)
+                .bearer_auth(&token_resp.access_token)
+                .send()
+                .await
+                .map_err(|e| format!("Google userinfo request failed: {}", e))?
+                .text()
+                .await
+                .map_err(|e| format!("Failed to read userinfo response: {}", e))?;
+            eprintln!("[OAuth] Google userinfo response: {}", &resp_text[..resp_text.len().min(500)]);
+            let info: GoogleUserInfo = serde_json::from_str(&resp_text)
+                .map_err(|e| format!("Failed to parse userinfo: {}", e))?;
+            info.email
+        }
+        "microsoft" => {
+            let resp_text = http
+                .get("https://graph.microsoft.com/v1.0/me")
+                .bearer_auth(&token_resp.access_token)
+                .send()
+                .await
+                .map_err(|e| format!("Microsoft userinfo request failed: {}", e))?
+                .text()
+                .await
+                .map_err(|e| format!("Failed to read userinfo response: {}", e))?;
+            eprintln!("[OAuth] Microsoft userinfo response: {}", &resp_text[..resp_text.len().min(500)]);
+            let info: MicrosoftUserInfo = serde_json::from_str(&resp_text)
+                .map_err(|e| format!("Failed to parse userinfo: {}", e))?;
+            info.mail.or(info.user_principal_name).unwrap_or_default()
+        }
+        _ => String::new(),
+    };
+
+    let now = chrono::Local::now().to_rfc3339();
+    let expires_at = (chrono::Utc::now()
+        + chrono::Duration::seconds(token_resp.expires_in as i64))
+    .to_rfc3339();
+
+    // Store tokens — release lock before returning
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO oauth_tokens (provider, access_token, refresh_token, expires_at, account_email, scopes, last_sync_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+            rusqlite::params![
+                provider,
+                token_resp.access_token,
+                token_resp.refresh_token,
+                expires_at,
+                account_email,
+                match provider.as_str() {
+                    "google" => GOOGLE_SCOPES,
+                    "microsoft" => MICROSOFT_SCOPES,
+                    _ => "",
+                },
+                now,
+                now,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(OAuthStatus {
+        connected: true,
+        provider,
+        account_email: Some(account_email),
+        last_sync_at: None,
+    })
+}
+
+#[tauri::command]
+pub fn check_oauth_status(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<OAuthStatus, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+    let result = conn.query_row(
+        "SELECT account_email, last_sync_at FROM oauth_tokens WHERE provider = ?1",
+        [&provider],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        },
+    );
+
+    match result {
+        Ok((email, last_sync)) => Ok(OAuthStatus {
+            connected: true,
+            provider,
+            account_email: email,
+            last_sync_at: last_sync,
+        }),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(OAuthStatus {
+            connected: false,
+            provider,
+            account_email: None,
+            last_sync_at: None,
+        }),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn disconnect_oauth(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM oauth_tokens WHERE provider = ?1",
+        [&provider],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sync_emails(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<SyncResult, String> {
+    // Get valid token (may refresh via HTTP, no lock held during await)
+    let access_token = get_valid_token(&state, &provider).await?;
+
+    // Gather needed data while holding the lock, then release
+    let (client_emails, last_sync_at) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare("SELECT email FROM clients WHERE email IS NOT NULL AND email != ''")
+            .map_err(|e| e.to_string())?;
+        let emails: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let last_sync: Option<String> = conn
+            .query_row(
+                "SELECT last_sync_at FROM oauth_tokens WHERE provider = ?1",
+                [&provider],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+
+        (emails, last_sync)
+    };
+
+    if client_emails.is_empty() {
+        return Ok(SyncResult {
+            imported_count: 0,
+            documents: vec![],
+        });
+    }
+
+    // Create email imports directory
+    let import_dir = dirs::document_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Documents"))
+        .join("BrokerAgent")
+        .join("email_imports");
+    std::fs::create_dir_all(&import_dir)
+        .map_err(|e| format!("Failed to create import dir: {}", e))?;
+
+    let http = HttpClient::new();
+    let imported_docs: Vec<(String, String, String)> = match provider.as_str() {
+        "google" => {
+            sync_gmail(&http, &access_token, &client_emails, &import_dir, &last_sync_at).await?
+        }
+        "microsoft" => {
+            sync_outlook(&http, &access_token, &client_emails, &import_dir, &last_sync_at).await?
+        }
+        _ => return Err("Unknown provider".to_string()),
+    };
+
+    // Import documents into DB
+    let doc_names: Vec<String> = imported_docs
+        .iter()
+        .map(|(_, subj, path)| {
+            let fname = std::path::Path::new(path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| subj.clone());
+            fname
+        })
+        .collect();
+
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        for (sender, subject, path) in &imported_docs {
+            let _ = crate::do_import_email_document(&conn, sender, subject, path);
+        }
+
+        // Update last_sync_at
+        let now = chrono::Local::now().to_rfc3339();
+        conn.execute(
+            "UPDATE oauth_tokens SET last_sync_at = ?1, updated_at = ?2 WHERE provider = ?3",
+            rusqlite::params![now, now, provider],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(SyncResult {
+        imported_count: doc_names.len(),
+        documents: doc_names,
+    })
+}
+
+#[tauri::command]
+pub async fn create_calendar_event(
+    state: State<'_, AppState>,
+    provider: String,
+    event: CalendarEvent,
+) -> Result<String, String> {
+    let access_token = get_valid_token(&state, &provider).await?;
+
+    let http = HttpClient::new();
+
+    match provider.as_str() {
+        "google" => create_google_event(&http, &access_token, &event).await,
+        "microsoft" => create_microsoft_event(&http, &access_token, &event).await,
+        _ => Err("Unknown provider".to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gmail sync
+// ---------------------------------------------------------------------------
+
+async fn sync_gmail(
+    http: &HttpClient,
+    token: &str,
+    client_emails: &[String],
+    import_dir: &std::path::Path,
+    last_sync_at: &Option<String>,
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut imported = Vec::new();
+
+    // Build query
+    let email_query: Vec<String> = client_emails
+        .iter()
+        .map(|e| format!("from:{}", e))
+        .collect();
+    let mut query = format!("({}) has:attachment", email_query.join(" OR "));
+
+    if let Some(ref since) = last_sync_at {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
+            query.push_str(&format!(" after:{}", dt.format("%Y/%m/%d")));
+        }
+    }
+
+    let list_url = format!(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages?q={}&maxResults=50",
+        urlencoding::encode(&query)
+    );
+
+    let resp = http
+        .get(&list_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Gmail list failed: {}", e))?;
+
+    let list: GmailMessageList = resp.json().await.map_err(|e| e.to_string())?;
+
+    let messages = match list.messages {
+        Some(msgs) => msgs,
+        None => return Ok(imported),
+    };
+
+    for msg_ref in messages.iter().take(20) {
+        let msg_url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}",
+            msg_ref.id
+        );
+        let msg_resp = http
+            .get(&msg_url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let msg: GmailMessage = msg_resp.json().await.map_err(|e| e.to_string())?;
+
+        let payload = match msg.payload {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Extract sender and subject from headers
+        let mut sender = String::new();
+        let mut subject = String::new();
+        if let Some(ref headers) = payload.headers {
+            for h in headers {
+                if h.name.eq_ignore_ascii_case("From") {
+                    // Extract email from "Name <email>" format
+                    sender = if let Some(start) = h.value.find('<') {
+                        h.value[start + 1..].trim_end_matches('>').to_string()
+                    } else {
+                        h.value.clone()
+                    };
+                }
+                if h.name.eq_ignore_ascii_case("Subject") {
+                    subject = h.value.clone();
+                }
+            }
+        }
+
+        // Download attachments
+        if let Some(ref parts) = payload.parts {
+            for part in parts {
+                let filename = match &part.filename {
+                    Some(f) if !f.is_empty() => f.clone(),
+                    _ => continue,
+                };
+
+                let attachment_id = match &part.body {
+                    Some(body) => match &body.attachment_id {
+                        Some(id) => id.clone(),
+                        None => continue,
+                    },
+                    None => continue,
+                };
+
+                let att_url = format!(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/messages/{}/attachments/{}",
+                    msg.id, attachment_id
+                );
+                let att_resp = http
+                    .get(&att_url)
+                    .bearer_auth(token)
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let att: GmailAttachment = att_resp.json().await.map_err(|e| e.to_string())?;
+
+                // Gmail uses URL-safe base64 (may or may not have padding)
+                let trimmed = att.data.trim().trim_end_matches('=');
+                let data = URL_SAFE_NO_PAD
+                    .decode(trimmed)
+                    .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+                let file_path = import_dir.join(&filename);
+                std::fs::write(&file_path, &data)
+                    .map_err(|e| format!("Failed to save attachment: {}", e))?;
+
+                imported.push((
+                    sender.clone(),
+                    subject.clone(),
+                    file_path.to_string_lossy().to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(imported)
+}
+
+// ---------------------------------------------------------------------------
+// Outlook sync
+// ---------------------------------------------------------------------------
+
+async fn sync_outlook(
+    http: &HttpClient,
+    token: &str,
+    client_emails: &[String],
+    import_dir: &std::path::Path,
+    last_sync_at: &Option<String>,
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut imported = Vec::new();
+
+    for email in client_emails {
+        let mut filter = format!(
+            "from/emailAddress/address eq '{}' and hasAttachments eq true",
+            email
+        );
+
+        if let Some(ref since) = last_sync_at {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
+                filter.push_str(&format!(
+                    " and receivedDateTime ge {}",
+                    dt.format("%Y-%m-%dT%H:%M:%SZ")
+                ));
+            }
+        }
+
+        let list_url = format!(
+            "https://graph.microsoft.com/v1.0/me/messages?$filter={}&$top=20&$select=id,subject,from",
+            urlencoding::encode(&filter)
+        );
+
+        let resp = http
+            .get(&list_url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Outlook list failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            continue;
+        }
+
+        let list: GraphMessageList = resp.json().await.map_err(|e| e.to_string())?;
+
+        for msg in &list.value {
+            let sender = msg
+                .from
+                .as_ref()
+                .map(|f| f.email_address.address.clone())
+                .unwrap_or_default();
+            let subject = msg.subject.clone().unwrap_or_default();
+
+            let att_url = format!(
+                "https://graph.microsoft.com/v1.0/me/messages/{}/attachments",
+                msg.id
+            );
+            let att_resp = http
+                .get(&att_url)
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if !att_resp.status().is_success() {
+                continue;
+            }
+
+            let att_list: GraphAttachmentList =
+                att_resp.json().await.map_err(|e| e.to_string())?;
+
+            for att in &att_list.value {
+                // Only process file attachments
+                let is_file = att
+                    .odata_type
+                    .as_ref()
+                    .map(|t| t.contains("fileAttachment"))
+                    .unwrap_or(false);
+                if !is_file {
+                    continue;
+                }
+
+                let filename = att.name.clone().unwrap_or_else(|| "attachment".to_string());
+                let content = match &att.content_bytes {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                use base64::engine::general_purpose::STANDARD;
+                let data = STANDARD
+                    .decode(content)
+                    .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+                let file_path = import_dir.join(&filename);
+                std::fs::write(&file_path, &data)
+                    .map_err(|e| format!("Failed to save attachment: {}", e))?;
+
+                imported.push((
+                    sender.clone(),
+                    subject.clone(),
+                    file_path.to_string_lossy().to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(imported)
+}
+
+// ---------------------------------------------------------------------------
+// Upcoming calendar meetings
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpcomingMeeting {
+    pub title: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub attendee_email: Option<String>,
+    pub client_name: Option<String>,
+    pub provider: String,
+}
+
+#[tauri::command]
+pub async fn get_upcoming_meetings(
+    state: State<'_, AppState>,
+) -> Result<Vec<UpcomingMeeting>, String> {
+    // Get connected providers and client emails
+    let (providers, client_map) = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+
+        let mut stmt = conn
+            .prepare("SELECT provider FROM oauth_tokens")
+            .map_err(|e| e.to_string())?;
+        let providers: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Build email -> client name map
+        let mut client_stmt = conn
+            .prepare("SELECT email, first_name, last_name FROM clients WHERE email IS NOT NULL AND email != ''")
+            .map_err(|e| e.to_string())?;
+        let client_map: std::collections::HashMap<String, String> = client_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?.to_lowercase(),
+                    format!("{} {}", row.get::<_, String>(1)?, row.get::<_, String>(2)?),
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        (providers, client_map)
+    };
+
+    if providers.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let http = HttpClient::new();
+    let mut all_meetings: Vec<UpcomingMeeting> = Vec::new();
+    let now = chrono::Utc::now();
+
+    for provider in &providers {
+        let token = get_valid_token(&state, provider).await?;
+
+        match provider.as_str() {
+            "google" => {
+                let time_min = now.to_rfc3339();
+                let time_max = (now + chrono::Duration::days(7)).to_rfc3339();
+                let url = format!(
+                    "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=10",
+                    urlencoding::encode(&time_min),
+                    urlencoding::encode(&time_max),
+                );
+
+                let resp = http.get(&url).bearer_auth(&token).send().await;
+                if let Ok(resp) = resp {
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(items) = data["items"].as_array() {
+                                for item in items {
+                                    let title = item["summary"].as_str().unwrap_or("").to_string();
+                                    let start = item["start"]["dateTime"]
+                                        .as_str()
+                                        .or_else(|| item["start"]["date"].as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let end = item["end"]["dateTime"]
+                                        .as_str()
+                                        .or_else(|| item["end"]["date"].as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    // Check attendees against client list
+                                    let mut attendee_email = None;
+                                    let mut client_name = None;
+                                    if let Some(attendees) = item["attendees"].as_array() {
+                                        for att in attendees {
+                                            if let Some(email) = att["email"].as_str() {
+                                                let email_lower = email.to_lowercase();
+                                                if let Some(name) = client_map.get(&email_lower) {
+                                                    attendee_email = Some(email.to_string());
+                                                    client_name = Some(name.clone());
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    all_meetings.push(UpcomingMeeting {
+                                        title,
+                                        start_time: start,
+                                        end_time: end,
+                                        attendee_email,
+                                        client_name,
+                                        provider: "google".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "microsoft" => {
+                let time_min = now.format("%Y-%m-%dT%H:%M:%S").to_string();
+                let time_max = (now + chrono::Duration::days(7))
+                    .format("%Y-%m-%dT%H:%M:%S")
+                    .to_string();
+                let url = format!(
+                    "https://graph.microsoft.com/v1.0/me/calendarview?startdatetime={}&enddatetime={}&$top=10&$orderby=start/dateTime&$select=subject,start,end,attendees",
+                    urlencoding::encode(&time_min),
+                    urlencoding::encode(&time_max),
+                );
+
+                let resp = http.get(&url).bearer_auth(&token).send().await;
+                if let Ok(resp) = resp {
+                    if resp.status().is_success() {
+                        if let Ok(data) = resp.json::<serde_json::Value>().await {
+                            if let Some(items) = data["value"].as_array() {
+                                for item in items {
+                                    let title = item["subject"].as_str().unwrap_or("").to_string();
+                                    let start = item["start"]["dateTime"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let end = item["end"]["dateTime"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    let mut attendee_email = None;
+                                    let mut client_name = None;
+                                    if let Some(attendees) = item["attendees"].as_array() {
+                                        for att in attendees {
+                                            if let Some(email) = att["emailAddress"]["address"].as_str() {
+                                                let email_lower = email.to_lowercase();
+                                                if let Some(name) = client_map.get(&email_lower) {
+                                                    attendee_email = Some(email.to_string());
+                                                    client_name = Some(name.clone());
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    all_meetings.push(UpcomingMeeting {
+                                        title,
+                                        start_time: start,
+                                        end_time: end,
+                                        attendee_email,
+                                        client_name,
+                                        provider: "microsoft".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Sort by start time
+    all_meetings.sort_by(|a, b| a.start_time.cmp(&b.start_time));
+
+    Ok(all_meetings)
+}
+
+// ---------------------------------------------------------------------------
+// Calendar event creation
+// ---------------------------------------------------------------------------
+
+async fn create_google_event(
+    http: &HttpClient,
+    token: &str,
+    event: &CalendarEvent,
+) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "summary": event.title,
+        "start": {
+            "dateTime": event.start_time,
+        },
+        "end": {
+            "dateTime": event.end_time,
+        },
+    });
+
+    if let Some(ref desc) = event.description {
+        body["description"] = serde_json::json!(desc);
+    }
+    if let Some(ref attendee) = event.attendee_email {
+        body["attendees"] = serde_json::json!([{ "email": attendee }]);
+    }
+
+    let resp = http
+        .post("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Google Calendar request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Failed to create event: {}", err_text));
+    }
+
+    let result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let link = result["htmlLink"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    Ok(link)
+}
+
+async fn create_microsoft_event(
+    http: &HttpClient,
+    token: &str,
+    event: &CalendarEvent,
+) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "subject": event.title,
+        "start": {
+            "dateTime": event.start_time,
+            "timeZone": "UTC",
+        },
+        "end": {
+            "dateTime": event.end_time,
+            "timeZone": "UTC",
+        },
+    });
+
+    if let Some(ref desc) = event.description {
+        body["body"] = serde_json::json!({
+            "contentType": "Text",
+            "content": desc,
+        });
+    }
+    if let Some(ref attendee) = event.attendee_email {
+        body["attendees"] = serde_json::json!([{
+            "emailAddress": { "address": attendee },
+            "type": "required",
+        }]);
+    }
+
+    let resp = http
+        .post("https://graph.microsoft.com/v1.0/me/events")
+        .bearer_auth(token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Microsoft Calendar request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let err_text = resp.text().await.unwrap_or_default();
+        return Err(format!("Failed to create event: {}", err_text));
+    }
+
+    let result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let link = result["webLink"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    Ok(link)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // PKCE generation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn pkce_verifier_length_is_64() {
+        let (verifier, _challenge) = generate_pkce();
+        assert_eq!(verifier.len(), 64);
+    }
+
+    #[test]
+    fn pkce_verifier_is_alphanumeric() {
+        let (verifier, _challenge) = generate_pkce();
+        assert!(
+            verifier.chars().all(|c| c.is_ascii_alphanumeric()),
+            "Verifier should only contain alphanumeric characters, got: {}",
+            verifier
+        );
+    }
+
+    #[test]
+    fn pkce_challenge_is_valid_base64url() {
+        let (_verifier, challenge) = generate_pkce();
+
+        // base64url must not contain '+', '/', or '=' (no padding)
+        assert!(
+            !challenge.contains('+'),
+            "Challenge must not contain '+': {}",
+            challenge
+        );
+        assert!(
+            !challenge.contains('/'),
+            "Challenge must not contain '/': {}",
+            challenge
+        );
+        assert!(
+            !challenge.contains('='),
+            "Challenge must not contain '=' padding: {}",
+            challenge
+        );
+
+        // Should be decodable as base64url without padding
+        let decoded = URL_SAFE_NO_PAD.decode(&challenge);
+        assert!(
+            decoded.is_ok(),
+            "Challenge should be valid base64url: {}",
+            challenge
+        );
+
+        // SHA-256 output is 32 bytes
+        assert_eq!(decoded.unwrap().len(), 32);
+    }
+
+    #[test]
+    fn pkce_challenge_is_sha256_of_verifier() {
+        let (verifier, challenge) = generate_pkce();
+
+        // Manually compute expected challenge
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let expected = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        assert_eq!(challenge, expected);
+    }
+
+    #[test]
+    fn pkce_produces_different_verifiers() {
+        let (v1, _) = generate_pkce();
+        let (v2, _) = generate_pkce();
+        assert_ne!(
+            v1, v2,
+            "Two calls to generate_pkce should produce different verifiers"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Token expiry logic tests
+    // -----------------------------------------------------------------------
+
+    /// Helper that mirrors the expiry check in get_valid_token:
+    /// returns true if the token is still valid (i.e., now + 5min < expires_at).
+    fn is_token_valid(expires_at_rfc3339: &str) -> bool {
+        let expires = chrono::DateTime::parse_from_rfc3339(expires_at_rfc3339)
+            .expect("invalid rfc3339 timestamp");
+        let now = chrono::Utc::now();
+        let buffer = chrono::Duration::minutes(5);
+        now + buffer < expires
+    }
+
+    #[test]
+    fn token_valid_when_expires_far_in_future() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            is_token_valid(&future),
+            "Token expiring in 1 hour should be valid"
+        );
+    }
+
+    #[test]
+    fn token_invalid_when_already_expired() {
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        assert!(
+            !is_token_valid(&past),
+            "Token that expired 1 hour ago should be invalid"
+        );
+    }
+
+    #[test]
+    fn token_invalid_within_5_minute_buffer() {
+        // Token expires in 3 minutes -- within the 5-minute buffer
+        let soon = (chrono::Utc::now() + chrono::Duration::minutes(3)).to_rfc3339();
+        assert!(
+            !is_token_valid(&soon),
+            "Token expiring in 3 minutes should be treated as invalid (5-min buffer)"
+        );
+    }
+
+    #[test]
+    fn token_valid_just_outside_buffer() {
+        // Token expires in 6 minutes -- outside the 5-minute buffer
+        let later = (chrono::Utc::now() + chrono::Duration::minutes(6)).to_rfc3339();
+        assert!(
+            is_token_valid(&later),
+            "Token expiring in 6 minutes should be valid (outside 5-min buffer)"
+        );
+    }
+}
