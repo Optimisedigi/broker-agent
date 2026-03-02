@@ -1,5 +1,5 @@
 {
-  "name": "brokerage-crm",
+  "name": "broker-agent",
   "version": "1.0.0",
   "description": "A secure, local-first CRM for mortgage brokers with meeting recording, document management, and bank policy matching.",
   "main": "index.js",
