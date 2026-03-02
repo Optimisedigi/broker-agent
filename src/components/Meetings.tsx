@@ -50,6 +50,7 @@ function Meetings() {
   const [savedMeetingName, setSavedMeetingName] = useState("");
   const [savedMeetingEmail, setSavedMeetingEmail] = useState("");
   const [savedMeetingDuration, setSavedMeetingDuration] = useState(0);
+  const [meetingTitle, setMeetingTitle] = useState("");
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -244,7 +245,7 @@ function Meetings() {
           selectedClientId && selectedClientId !== "manual" ? parseInt(selectedClientId) : 0,
         client_name: clientName,
         client_email: clientEmail,
-        title: `Meeting with ${clientName}`,
+        title: meetingTitle.trim() || `Meeting with ${clientName}`,
         recording_path: null,
         transcript: transcript || null,
         summary: null,
@@ -322,7 +323,7 @@ function Meetings() {
       const link: string = await invoke("create_calendar_event", {
         provider: calendarProvider,
         event: {
-          title: `Meeting with ${savedMeetingName}`,
+          title: meetingTitle.trim() || `Meeting with ${savedMeetingName}`,
           start_time: now.toISOString(),
           end_time: end.toISOString(),
           attendee_email: savedMeetingEmail || null,
@@ -372,7 +373,7 @@ function Meetings() {
           </p>
           <div className="bg-white rounded-lg border border-green-200 p-3 mb-4 text-sm space-y-1">
             <p>
-              <span className="font-medium">Title:</span> Meeting with {savedMeetingName}
+              <span className="font-medium">Title:</span> {meetingTitle.trim() || `Meeting with ${savedMeetingName}`}
             </p>
             {savedMeetingEmail && (
               <p>
@@ -488,6 +489,20 @@ function Meetings() {
               </div>
             )}
 
+            <div>
+              <label className="block text-sm font-medium mb-1">Meeting Title</label>
+              <input
+                type="text"
+                value={meetingTitle}
+                onChange={(e) => setMeetingTitle(e.target.value)}
+                className="input"
+                placeholder={clientName ? `Meeting with ${clientName}` : "e.g., Intro Call, Settlement Review"}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Leave blank to use default title
+              </p>
+            </div>
+
             <div className="flex gap-3">
               <button type="submit" className="btn-primary" disabled={!clientName || !clientEmail}>
                 Start Recording
@@ -500,6 +515,7 @@ function Meetings() {
                   setIsManualEntry(false);
                   setClientName("");
                   setClientEmail("");
+                  setMeetingTitle("");
                 }}
                 className="btn-secondary"
               >

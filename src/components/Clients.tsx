@@ -11,6 +11,22 @@ function stripHtmlToText(html: string): string {
   return (doc.body.textContent || "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function stripEmailSignOff(text: string): string {
+  const patterns = [
+    /\n\s*(regards|kind regards|best regards|warm regards|cheers|thanks|thank you|many thanks|sincerely|best|all the best|yours sincerely|yours faithfully),?\s*\n.*/is,
+    /\n\s*-{2,}\s*\n.*/s,
+    /\n\s*_{2,}\s*\n.*/s,
+    /\[Signature\].*$/is,
+    /\nSent from my (iPhone|iPad|Samsung|Android).*/is,
+    /\nGet Outlook for.*/is,
+  ];
+  let result = text;
+  for (const p of patterns) {
+    result = result.replace(p, "");
+  }
+  return result.trim();
+}
+
 interface Document {
   id?: number;
   client_id: number;
@@ -394,9 +410,13 @@ function Clients() {
 
   const formatMeetingDate = (dateStr: string): string => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-AU', {
+    const datePart = date.toLocaleDateString('en-AU', {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
     });
+    const timePart = date.toLocaleTimeString('en-AU', {
+      hour: 'numeric', minute: '2-digit', hour12: true
+    });
+    return `${datePart}, ${timePart}`;
   };
 
   const renderDocumentPreview = () => {
@@ -1907,7 +1927,7 @@ function Clients() {
             <p className="text-gray-500 text-sm">No meetings recorded yet for this client.</p>
           ) : (
             <div className="space-y-3">
-              {clientMeetings.map((meeting) => {
+              {[...clientMeetings].sort((a, b) => new Date(b.meeting_date).getTime() - new Date(a.meeting_date).getTime()).map((meeting) => {
                 const isExpanded = expandedMeetingId === meeting.id;
                 const isEditingSummary = editingSummaryId === meeting.id;
                 const isTranscriptOpen = transcriptExpanded === meeting.id;
@@ -1918,7 +1938,7 @@ function Clients() {
                       onClick={() => setExpandedMeetingId(isExpanded ? null : (meeting.id ?? null))}
                       className="w-full p-3 text-left hover:bg-gray-100 transition-colors"
                     >
-                      <div className="flex items-center gap-2 mb-0.5">
+                      <div className="flex items-center gap-2">
                         <svg
                           className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? "rotate-90" : ""}`}
                           fill="none"
@@ -1932,36 +1952,32 @@ function Clients() {
                             d="M9 5l7 7-7 7"
                           />
                         </svg>
-                        <p className="text-sm font-medium text-gray-700">
-                          {formatMeetingDate(meeting.meeting_date)}
-                        </p>
-                        {meeting.meeting_type === "email" && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">Email</span>
-                        )}
-                      </div>
-                      <div className="ml-6 flex items-center gap-2">
                         {meeting.meeting_type === "email" ? (
-                          <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
+                          <span className="text-xs font-semibold text-blue-600 flex-shrink-0">Email</span>
                         ) : (
-                          <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
+                          <span className="text-xs font-semibold text-green-600 flex-shrink-0">Meeting</span>
                         )}
-                        <p className="font-medium text-sm">{meeting.title}</p>
+                        <p className="font-medium text-sm min-w-0 truncate">{meeting.title}</p>
                         {meeting.meeting_type !== "email" && meeting.duration_seconds && (
-                          <span className="text-xs text-gray-500">
+                          <span className="text-xs text-gray-500 flex-shrink-0">
                             ({formatDuration(meeting.duration_seconds)})
                           </span>
                         )}
+                        <span className="flex-1" />
+                        <span className="text-xs text-gray-600 font-medium whitespace-nowrap flex-shrink-0">
+                          {formatMeetingDate(meeting.meeting_date)}
+                        </span>
                       </div>
-                      {/* Collapsed email preview */}
-                      {!isExpanded && meeting.meeting_type === "email" && (meeting.summary || meeting.notes) && (
+                      {/* Collapsed preview - no AI Summary label */}
+                      {!isExpanded && meeting.summary && (
+                        <p className="ml-6 mt-1 text-xs text-gray-500 leading-relaxed line-clamp-2">
+                          {meeting.meeting_type === "email" ? stripEmailSignOff(stripHtmlToText(meeting.summary)) : stripHtmlToText(meeting.summary)}
+                        </p>
+                      )}
+                      {!isExpanded && !meeting.summary && meeting.meeting_type === "email" && meeting.notes && (
                         <p className="ml-6 mt-1 text-xs text-gray-500 truncate">
                           {(() => {
-                            const preview = meeting.summary || meeting.notes || "";
-                            const text = stripHtmlToText(preview);
+                            const text = stripHtmlToText(meeting.notes || "");
                             return text.slice(0, 120) + (text.length > 120 ? "..." : "");
                           })()}
                         </p>
@@ -2060,18 +2076,8 @@ function Clients() {
                                 </div>
                               </div>
                             ) : (
-                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripHtmlToText(meeting.summary)}</p>
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{meeting.meeting_type === "email" ? stripEmailSignOff(stripHtmlToText(meeting.summary)) : stripHtmlToText(meeting.summary)}</p>
                             )}
-                          </div>
-                        )}
-
-                        {/* Email Content (plain text) */}
-                        {meeting.meeting_type === "email" && meeting.notes && (
-                          <div className="bg-white border border-gray-200 rounded-lg p-3">
-                            <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">
-                              Email Content
-                            </h4>
-                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripHtmlToText(meeting.notes)}</p>
                           </div>
                         )}
 
@@ -2180,8 +2186,8 @@ function Clients() {
                           )}
                         </div>
 
-                        {/* Full Transcript - collapsed by default, only if exists */}
-                        {meeting.transcript && (
+                        {/* Full Transcript / Email Content - collapsed by default */}
+                        {(meeting.transcript || (meeting.meeting_type === "email" && meeting.notes)) && (
                           <div>
                             <button
                               onClick={(e) => {
@@ -2205,12 +2211,12 @@ function Clients() {
                                   d="M9 5l7 7-7 7"
                                 />
                               </svg>
-                              Full Transcript
+                              {meeting.meeting_type === "email" ? "Full Email" : "Full Transcript"}
                             </button>
                             {isTranscriptOpen && (
                               <div className="bg-white border border-gray-200 rounded-lg p-3 max-h-60 overflow-y-auto mt-1">
                                 <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                                  {meeting.transcript}
+                                  {meeting.meeting_type === "email" ? stripHtmlToText(meeting.notes || "") : meeting.transcript}
                                 </p>
                               </div>
                             )}

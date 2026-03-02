@@ -85,6 +85,11 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
                         <span className="font-medium text-gray-700">{meeting.client_name}</span>
                         {meeting.title && <span className="text-gray-400 ml-1">| {meeting.title}</span>}
                       </>
+                    ) : meeting.attendee_email ? (
+                      <>
+                        <span className="font-medium text-gray-700">{meeting.attendee_email}</span>
+                        {meeting.title && <span className="text-gray-400 ml-1">| {meeting.title}</span>}
+                      </>
                     ) : (
                       <span className="font-medium text-gray-700">{meeting.title}</span>
                     )}

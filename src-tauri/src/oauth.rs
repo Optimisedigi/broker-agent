@@ -94,6 +94,8 @@ pub struct CalendarEvent {
 pub struct SyncResult {
     pub imported_count: usize,
     pub documents: Vec<String>,
+    pub email_count: usize,
+    pub document_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +151,9 @@ struct GmailMessage {
 struct GmailPayload {
     headers: Option<Vec<GmailHeader>>,
     parts: Option<Vec<GmailPart>>,
+    body: Option<GmailBody>,
+    #[serde(rename = "mimeType")]
+    mime_type: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -633,6 +638,8 @@ pub async fn sync_emails(
         return Ok(SyncResult {
             imported_count: 0,
             documents: vec![],
+            email_count: 0,
+            document_count: 0,
         });
     }
 
@@ -663,6 +670,20 @@ pub async fn sync_emails(
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         for email in &synced_emails {
+            // Skip if this email was already synced (dedup by external_id/message_id)
+            if !email.message_id.is_empty() {
+                let already_synced: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM meetings WHERE external_id = ?1",
+                        [&email.message_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0) > 0;
+                if already_synced {
+                    continue;
+                }
+            }
+
             // Import attachments
             for path in &email.attachment_paths {
                 if let Err(e) = crate::do_import_email_document(&conn, &email.sender, &email.subject, path) {
@@ -814,6 +835,8 @@ pub async fn sync_emails(
 
     Ok(SyncResult {
         imported_count: doc_names.len(),
+        email_count: new_email_meetings.len(),
+        document_count: doc_names.len(),
         documents: doc_names,
     })
 }
@@ -848,12 +871,12 @@ async fn sync_gmail(
 ) -> Result<Vec<SyncedEmail>, String> {
     let mut imported = Vec::new();
 
-    // Build query
+    // Build query - search for emails both FROM and TO client addresses
     let email_query: Vec<String> = client_emails
         .iter()
-        .map(|e| format!("from:{}", e))
+        .flat_map(|e| vec![format!("from:{}", e), format!("to:{}", e)])
         .collect();
-    let mut query = format!("({}) has:attachment", email_query.join(" OR "));
+    let mut query = format!("({})", email_query.join(" OR "));
 
     if let Some(ref since) = last_sync_at {
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
@@ -899,21 +922,83 @@ async fn sync_gmail(
             None => continue,
         };
 
-        // Extract sender and subject from headers
+        // Extract sender, recipients and subject from headers
         let mut sender = String::new();
+        let mut to_addresses: Vec<String> = Vec::new();
         let mut subject = String::new();
         if let Some(ref headers) = payload.headers {
             for h in headers {
                 if h.name.eq_ignore_ascii_case("From") {
-                    // Extract email from "Name <email>" format
                     sender = if let Some(start) = h.value.find('<') {
                         h.value[start + 1..].trim_end_matches('>').to_string()
                     } else {
                         h.value.clone()
                     };
                 }
+                if h.name.eq_ignore_ascii_case("To") {
+                    // Parse "Name <email>, Name2 <email2>" format
+                    for part in h.value.split(',') {
+                        let addr = if let Some(start) = part.find('<') {
+                            part[start + 1..].trim_end_matches('>').trim().to_string()
+                        } else {
+                            part.trim().to_string()
+                        };
+                        to_addresses.push(addr.to_lowercase());
+                    }
+                }
                 if h.name.eq_ignore_ascii_case("Subject") {
                     subject = h.value.clone();
+                }
+            }
+        }
+
+        // Determine client email: if sender matches a client, use sender.
+        // Otherwise check To addresses for a client match (broker sent email to client).
+        let contact_email = {
+            let sender_lower = sender.to_lowercase();
+            if client_emails.iter().any(|ce| ce.to_lowercase() == sender_lower) {
+                sender_lower
+            } else {
+                to_addresses.iter()
+                    .find(|to| client_emails.iter().any(|ce| ce.to_lowercase() == **to))
+                    .cloned()
+                    .unwrap_or(sender_lower)
+            }
+        };
+
+        // Extract email body from parts or payload body
+        let mut email_body: Option<String> = None;
+        if let Some(ref parts) = payload.parts {
+            for part in parts {
+                let is_text = part.mime_type.as_deref() == Some("text/plain")
+                    || part.mime_type.as_deref() == Some("text/html");
+                if is_text {
+                    if let Some(ref body) = part.body {
+                        if let Some(ref data) = body.data {
+                            let trimmed = data.trim().trim_end_matches('=');
+                            if let Ok(decoded) = URL_SAFE_NO_PAD.decode(trimmed) {
+                                if let Ok(text) = String::from_utf8(decoded) {
+                                    email_body = Some(text);
+                                    if part.mime_type.as_deref() == Some("text/plain") {
+                                        break; // prefer plain text
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: body directly on payload (no multipart)
+        if email_body.is_none() {
+            if let Some(ref body) = payload.body {
+                if let Some(ref data) = body.data {
+                    let trimmed = data.trim().trim_end_matches('=');
+                    if let Ok(decoded) = URL_SAFE_NO_PAD.decode(trimmed) {
+                        if let Ok(text) = String::from_utf8(decoded) {
+                            email_body = Some(text);
+                        }
+                    }
                 }
             }
         }
@@ -954,7 +1039,8 @@ async fn sync_gmail(
                     .decode(trimmed)
                     .map_err(|e| format!("Base64 decode error: {}", e))?;
 
-                let file_path = import_dir.join(&filename);
+                // Use message ID prefix for unique file paths
+                let file_path = import_dir.join(format!("{}_{}", msg.id, filename));
                 std::fs::write(&file_path, &data)
                     .map_err(|e| format!("Failed to save attachment: {}", e))?;
 
@@ -963,10 +1049,10 @@ async fn sync_gmail(
         }
 
         imported.push(SyncedEmail {
-            sender: sender.clone(),
+            sender: contact_email.clone(),
             subject: subject.clone(),
             attachment_paths,
-            body: None,
+            body: email_body,
             received_at: None,
             message_id: msg.id.clone(),
         });
@@ -990,27 +1076,35 @@ async fn sync_outlook(
 
     for email in client_emails {
         let email_lower = email.to_lowercase();
-        let mut filter = format!(
-            "from/emailAddress/address eq '{}'",
-            email_lower
-        );
+        // Track seen message IDs to avoid duplicates across inbox/sent queries
+        let mut seen_ids = std::collections::HashSet::new();
 
-        if let Some(ref since) = last_sync_at {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
-                filter.push_str(&format!(
-                    " and receivedDateTime ge {}",
-                    dt.format("%Y-%m-%dT%H:%M:%SZ")
-                ));
+        // Search both inbox (from client) and sent items (to client)
+        let queries: Vec<(String, String)> = {
+            let mut time_filter = String::new();
+            if let Some(ref since) = last_sync_at {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(since) {
+                    time_filter = format!(
+                        " and receivedDateTime ge '{}'",
+                        dt.format("%Y-%m-%dT%H:%M:%SZ")
+                    );
+                }
             }
-        }
+            vec![
+                // Emails FROM the client (in inbox)
+                (
+                    format!(
+                        "https://graph.microsoft.com/v1.0/me/messages?$filter={}&$top=20&$select=id,subject,from,body,receivedDateTime,hasAttachments",
+                        urlencoding::encode(&format!("from/emailAddress/address eq '{}'{}",  email_lower, time_filter))
+                    ),
+                    email_lower.clone(),
+                ),
+            ]
+        };
 
-        let list_url = format!(
-            "https://graph.microsoft.com/v1.0/me/messages?$filter={}&$top=20&$select=id,subject,from,body,receivedDateTime,hasAttachments",
-            urlencoding::encode(&filter)
-        );
-
+        for (list_url, client_email) in &queries {
         let resp = http
-            .get(&list_url)
+            .get(list_url)
             .bearer_auth(token)
             .send()
             .await
@@ -1019,18 +1113,26 @@ async fn sync_outlook(
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            eprintln!("[Sync] Outlook filter failed for {} ({}): {}", email, status, body);
+            eprintln!("[Sync] Outlook filter failed for {} ({}): {}", client_email, status, body);
             continue;
         }
 
         let list: GraphMessageList = resp.json().await.map_err(|e| e.to_string())?;
 
         for msg in &list.value {
+            // Skip if already processed from another query
+            if !seen_ids.insert(msg.id.clone()) {
+                continue;
+            }
+
             let sender = msg
                 .from
                 .as_ref()
                 .map(|f| f.email_address.address.clone())
                 .unwrap_or_default();
+            // Use client email as the contact, whether they sent or received
+            let contact_email = client_email.clone();
+            let _ = &sender; // keep for logging
             let subject = msg.subject.clone().unwrap_or_default();
             let body = msg.body.as_ref().and_then(|b| b.content.clone());
             let received_at = msg.received_date_time.clone();
@@ -1074,7 +1176,8 @@ async fn sync_outlook(
                             .decode(content)
                             .map_err(|e| format!("Base64 decode error: {}", e))?;
 
-                        let file_path = import_dir.join(&filename);
+                        // Use message ID prefix for unique file paths
+                        let file_path = import_dir.join(format!("{}_{}", msg.id, filename));
                         std::fs::write(&file_path, &data)
                             .map_err(|e| format!("Failed to save attachment: {}", e))?;
 
@@ -1084,7 +1187,7 @@ async fn sync_outlook(
             }
 
             imported.push(SyncedEmail {
-                sender,
+                sender: contact_email.clone(),
                 subject,
                 attachment_paths,
                 body,
@@ -1092,6 +1195,7 @@ async fn sync_outlook(
                 message_id: msg.id.clone(),
             });
         }
+        } // end queries loop
     }
 
     Ok(imported)
@@ -1150,6 +1254,14 @@ pub async fn get_upcoming_meetings(
         return Ok(vec![]);
     }
 
+    // Build list of (name, first_name, last_name) for title matching fallback
+    let client_names: Vec<(String, String)> = client_map.values()
+        .map(|full_name| {
+            let lower = full_name.to_lowercase();
+            (full_name.clone(), lower)
+        })
+        .collect();
+
     let http = HttpClient::new();
     let mut all_meetings: Vec<UpcomingMeeting> = Vec::new();
     let now = chrono::Utc::now();
@@ -1197,6 +1309,17 @@ pub async fn get_upcoming_meetings(
                                                     client_name = Some(name.clone());
                                                     break;
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // Fallback: match client name in meeting title
+                                    if client_name.is_none() {
+                                        let title_lower = title.to_lowercase();
+                                        for (full_name, name_lower) in &client_names {
+                                            if title_lower.contains(name_lower.as_str()) {
+                                                client_name = Some(full_name.clone());
+                                                break;
                                             }
                                         }
                                     }
@@ -1253,6 +1376,17 @@ pub async fn get_upcoming_meetings(
                                                     client_name = Some(name.clone());
                                                     break;
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // Fallback: match client name in meeting title
+                                    if client_name.is_none() {
+                                        let title_lower = title.to_lowercase();
+                                        for (full_name, name_lower) in &client_names {
+                                            if title_lower.contains(name_lower.as_str()) {
+                                                client_name = Some(full_name.clone());
+                                                break;
                                             }
                                         }
                                     }
