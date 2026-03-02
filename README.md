@@ -6,10 +6,10 @@ A secure, local-first desktop CRM for mortgage brokers. Manage clients, deals, d
 
 | Platform | Installer | Notes |
 |----------|-----------|-------|
-| macOS (Apple Silicon) | [Brokeragent.dmg](https://github.com/AiKirito/brokerage-crm/releases/latest) | macOS 12+ |
-| Windows | [Brokeragent_Setup.exe](https://github.com/AiKirito/brokerage-crm/releases/latest) | Windows 10+ |
+| macOS (Apple Silicon) | [Brokeragent.dmg](https://github.com/Optimisedigi/brokerage-crm/releases/latest) | macOS 12+ |
+| Windows | [Brokeragent_Setup.exe](https://github.com/Optimisedigi/brokerage-crm/releases/latest) | Windows 10+ |
 
-Download the latest release from the [Releases page](https://github.com/AiKirito/brokerage-crm/releases).
+Download the latest release from the [Releases page](https://github.com/Optimisedigi/brokerage-crm/releases).
 
 ## Security and Privacy
 
