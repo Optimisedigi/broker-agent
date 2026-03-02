@@ -1,214 +1,94 @@
-# Brokerage CRM - MVP
+# Brokeragent
 
-A secure, local-first CRM for mortgage brokers with meeting recording, document management, and bank policy matching.
+A secure, local-first desktop CRM for mortgage brokers. Manage clients, deals, documents, meetings, and bank policy matching, all from your desktop with zero cloud dependency.
 
-## Overview
+## Download
 
-Multi-tenant desktop application for 5-20 brokers. Local data storage with encrypted sync. No Teams license required for recording.
+| Platform | Installer | Notes |
+|----------|-----------|-------|
+| macOS (Apple Silicon) | [Brokeragent.dmg](https://github.com/AiKirito/brokerage-crm/releases/latest) | macOS 12+ |
+| Windows | [Brokeragent_Setup.exe](https://github.com/AiKirito/brokerage-crm/releases/latest) | Windows 10+ |
 
-## Tech Stack
+Download the latest release from the [Releases page](https://github.com/AiKirito/brokerage-crm/releases).
 
-- **Frontend:** Tauri (Rust) + React + TypeScript
-- **Database:** SQLite (local, encrypted)
-- **Recording:** Local screen/audio capture (no Teams license)
-- **Transcription:** Whisper.cpp (local)
-- **Outlook:** Microsoft Graph API
-- **Sync:** mTLS encrypted to shared services
+## Security and Privacy
 
-## MVP Features (Phase 1)
+- **100% local**: All data is stored in a SQLite database on your machine. Nothing is sent to external servers.
+- **No telemetry**: The app collects zero analytics or usage data.
+- **On-device transcription**: Meeting recordings are transcribed locally using OpenAI Whisper. Audio never leaves your computer.
+- **OAuth tokens stored locally**: Gmail and Outlook credentials are kept in your local database and are never shared.
 
-### Core
-- [x] Client profiles (contact info, financial summary)
-- [x] Document vault (encrypted storage for payslips, statements)
-- [x] Meeting recorder with client capture
-- [x] Email auto-import (documents link to clients automatically)
-- [ ] Proposal generator (templates → PDF)
-- [x] Basic bank matching (manual policy entry, eligibility check)
-- [ ] Outlook integration (read emails, download attachments)
+## Installation
 
-### Security & Compliance
-- [ ] Data encryption at rest (AES-256)
-- [ ] Consent recording (MFAA/FBAA compliant)
-- [ ] Audit trails
-- [ ] 7-year data retention
+### macOS
 
-## Architecture
+1. Download `Brokeragent.dmg` from the Releases page.
+2. Open the `.dmg` and drag **Brokeragent** to your Applications folder.
+3. On first launch, macOS Gatekeeper will block the app because it is not signed with an Apple Developer certificate.
+   - Right-click (or Control-click) the app in Applications and select **Open**.
+   - Click **Open** in the dialog that appears. You only need to do this once.
 
-```
-┌─────────────────────────────────────────┐
-│         BROKER WORKSTATION              │
-│  ┌─────────────┐  ┌─────────────────┐  │
-│  │ Tauri App   │  │ SQLite (Encrypt)│  │
-│  │ React UI    │  │                 │  │
-│  └──────┬──────┘  └─────────────────┘  │
-│         │                               │
-│         ├── Screen/Audio Capture        │
-│         ├── Whisper.cpp (local)         │
-│         └── Outlook Graph API           │
-└─────────┬───────────────────────────────┘
-          │ mTLS
-┌─────────▼───────────────────────────────┐
-│      SHARED SERVICES (Self-hosted)      │
-│  ┌──────────────┐  ┌────────────────┐  │
-│  │ Bank Policy  │  │ Template Store │  │
-│  │ Hub          │  │                │  │
-│  └──────────────┘  └────────────────┘  │
-└─────────────────────────────────────────┘
-```
+### Windows
 
-## Development Phases
+1. Download `Brokeragent_Setup.exe` from the Releases page.
+2. Run the installer. Windows SmartScreen may show a warning because the app is not code-signed.
+   - Click **More info**, then click **Run anyway**.
+3. The installer runs per-user and does not require administrator privileges.
 
-### Phase 1: Foundation (Weeks 1-2)
-- [ ] Project setup (Tauri + React)
-- [ ] Database schema design
-- [ ] Encryption layer implementation
-- [ ] Basic UI shell
+## First Launch
 
-### Phase 2: Client Management (Weeks 3-4)
-- [ ] Client CRUD operations
-- [ ] Document upload/download
-- [ ] Document categorization
-- [ ] Search functionality
+On first launch the app will download the Whisper large-v3 model (~3 GB). This is a one-time download. After that, transcription works fully offline.
 
-### Phase 3: Proposals (Weeks 5-6)
-- [ ] Template system
-- [ ] Dynamic field insertion
-- [ ] PDF generation
-- [ ] Email sending via Outlook
+You can start using all other features (clients, deals, documents, email sync) immediately while the model downloads in the background.
 
-### Phase 4: Bank Matching (Weeks 7-8)
-- [ ] Bank policy data model
-- [ ] Eligibility calculator
-- [ ] Best-fit recommendation
-- [ ] Policy update mechanism
+## Data Location and Backup
 
-## Project Structure
+All application data is stored in a single SQLite file:
 
-```
-brokerage-crm/
-├── src/
-│   ├── components/     # React components
-│   ├── database/       # SQLite operations
-│   ├── encryption/     # Crypto utilities
-│   ├── outlook/        # MS Graph integration
-│   ├── recording/      # Screen/audio capture
-│   └── templates/      # Proposal templates
-├── src-tauri/          # Rust backend
-├── shared-services/    # Bank policy hub (future)
-└── docs/              # Documentation
-```
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/BrokerageCRM/database.db` |
+| Windows | `C:\Users\<you>\AppData\Roaming\BrokerageCRM\database.db` |
 
-## Getting Started
+The Whisper model is stored alongside it in the same directory.
+
+To back up your data, copy the `database.db` file to a safe location.
+
+## System Requirements
+
+| | Minimum | Recommended |
+|---|---------|-------------|
+| **OS** | macOS 12+ / Windows 10+ | macOS 14+ / Windows 11 |
+| **RAM** | 8 GB | 16 GB (for transcription) |
+| **Disk** | 4 GB free | 8 GB free |
+
+Transcription is CPU-intensive. 16 GB RAM and a modern multi-core processor are recommended for comfortable real-time use.
+
+## Development
 
 ```bash
 # Install dependencies
 npm install
 
-# Run dev mode
+# Run in development mode
 npm run tauri dev
 
-# Build
-npm run tauri build
+# Type-check
+npx tsc --noEmit
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-## Environment Variables
+## Creating a Release
 
-```env
-# Outlook API
-OUTLOOK_CLIENT_ID=
-OUTLOOK_CLIENT_SECRET=
-OUTLOOK_REDIRECT_URI=
+Tag a version and push to trigger the CI/CD pipeline:
 
-# Encryption
-MASTER_KEY=
-
-# Shared Services (future)
-SHARED_SERVICES_URL=
-SHARED_SERVICES_KEY=
+```bash
+git tag v0.1.0
+git push --tags
 ```
 
-## Security Notes
-
-- All client data encrypted locally
-- No cloud storage of sensitive data
-- Consent recording mandatory
-- Audit log of all data access
-- Secure key management required
-
-## Email Auto-Import Feature
-
-### How It Works
-
-1. **During Meeting:** Broker enters client's name and email before recording
-2. **After Meeting:** System asks "Save this client?"
-3. **Email Linking:** Once saved, any emails from that address auto-import to their profile
-
-### Flow
-
-```
-Client sends email with payslip
-         ↓
-Outlook webhook triggers
-         ↓
-System matches sender email to client
-         ↓
-Document auto-saved to client's vault
-         ↓
-Broker sees notification in CRM
-```
-
-### Document Types Auto-Detected
-
-| Email Subject/Attachment | Document Type | Auto-Action |
-|-------------------------|---------------|-------------|
-| Contains "payslip" | Payslip | Save to Payslips folder |
-| Contains "bank statement" | Bank Statement | Save to Bank Statements folder |
-| Contains "ID"/"license"/"passport" | ID Document | Save to ID Documents folder |
-| Other | General | Save to Unsorted (manual categorization) |
-
-### Technical Implementation
-
-**Database Schema:**
-- `clients` table: stores email as unique identifier
-- `email_imports` table: logs all auto-imported emails
-- Index on `clients.email` for fast lookups
-
-**Rust Commands:**
-- `find_client_by_email` - checks if sender exists
-- `import_email_document` - saves doc to client's vault
-- `get_recent_email_imports` - shows recent auto-imports
-
-**Security:**
-- Email content processed locally
-- Only attachments saved (not email body)
-- Audit log of all imports
-- Broker can disable auto-import per client
-
-## Future Phases (Post-MVP)
-
-### Phase 2: Meeting Intelligence
-- [x] Recording with local transcription (UI built)
-- [ ] Entity extraction (income, assets, etc.)
-- [ ] Auto-populate client profiles from transcripts
-
-### Phase 3: Advanced Bank Matching
-- [ ] Automatic policy scraping
-- [ ] Rate comparison
-- [ ] Change alerts
-
-### Phase 4: Multi-Broker
-- [ ] Admin dashboard
-- [ ] Broker management
-- [ ] Analytics
-
-## Open Questions
-
-1. Which banks to support initially? (Big 4 + ?)
-2. Existing CRM integration or replace?
-3. Teams recording confirmation
-4. Budget confirmation
-5. Compliance requirements (MFAA/FBAA/ASIC)
+This runs GitHub Actions to build macOS `.dmg` and Windows `.exe` installers, attached as a draft release on GitHub.
 
 ## License
 
-Private - Client Project
+Private

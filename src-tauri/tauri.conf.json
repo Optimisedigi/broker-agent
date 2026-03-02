@@ -36,12 +36,15 @@
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": ""
+      "timestampUrl": "",
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   },
-  "productName": "Broker Agent",
+  "productName": "Brokeragent",
   "version": "0.1.0",
-  "identifier": "com.brokerage.crm",
+  "identifier": "com.brokeragent.app",
   "plugins": {},
   "app": {
     "security": {
@@ -52,7 +55,7 @@
         "fullscreen": false,
         "height": 800,
         "resizable": true,
-        "title": "Broker Agent",
+        "title": "Brokeragent",
         "width": 1200,
         "center": true
       }
