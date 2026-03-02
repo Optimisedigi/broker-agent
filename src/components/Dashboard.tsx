@@ -1,70 +1,68 @@
-import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 
 interface DashboardProps {
-  stats: any
-  onNavigate?: (view: 'dashboard' | 'team' | 'clients' | 'policies' | 'meetings' | 'settings') => void
+  stats: any;
+  onNavigate?: (
+    view: "dashboard" | "team" | "clients" | "policies" | "meetings" | "settings",
+  ) => void;
 }
 
 interface UpcomingMeeting {
-  title: string
-  start_time: string
-  end_time: string
-  attendee_email: string | null
-  client_name: string | null
-  provider: string
+  title: string;
+  start_time: string;
+  end_time: string;
+  attendee_email: string | null;
+  client_name: string | null;
+  provider: string;
 }
 
-const awaitingResponse = [
-  'Mark Thompson',
-  'Priya Sharma',
-  'David Chen',
-]
+const awaitingResponse = ["Mark Thompson", "Priya Sharma", "David Chen"];
 
 function Dashboard({ stats, onNavigate }: DashboardProps) {
-  const [upcomingMeetings, setUpcomingMeetings] = useState<UpcomingMeeting[]>([])
-  const [loadingMeetings, setLoadingMeetings] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState<string | null>(null)
+  const [upcomingMeetings, setUpcomingMeetings] = useState<UpcomingMeeting[]>([]);
+  const [loadingMeetings, setLoadingMeetings] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   useEffect(() => {
-    loadUpcomingMeetings()
-  }, [])
+    loadUpcomingMeetings();
+  }, []);
 
   const loadUpcomingMeetings = async () => {
-    setLoadingMeetings(true)
+    setLoadingMeetings(true);
     try {
-      const meetings: UpcomingMeeting[] = await invoke('get_upcoming_meetings')
-      setUpcomingMeetings(meetings)
+      const meetings: UpcomingMeeting[] = await invoke("get_upcoming_meetings");
+      setUpcomingMeetings(meetings);
     } catch {
       // No calendar connected or error fetching
-      setUpcomingMeetings([])
+      setUpcomingMeetings([]);
     } finally {
-      setLoadingMeetings(false)
+      setLoadingMeetings(false);
     }
-  }
+  };
 
   const formatMeetingTime = (isoString: string) => {
-    if (!isoString) return ''
+    if (!isoString) return "";
     try {
-      const date = new Date(isoString)
-      const now = new Date()
-      const tomorrow = new Date(now)
-      tomorrow.setDate(tomorrow.getDate() + 1)
+      const date = new Date(isoString);
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
 
-      const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      const timeStr = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
       if (date.toDateString() === now.toDateString()) {
-        return `Today, ${timeStr}`
+        return `Today, ${timeStr}`;
       } else if (date.toDateString() === tomorrow.toDateString()) {
-        return `Tomorrow, ${timeStr}`
+        return `Tomorrow, ${timeStr}`;
       } else {
-        return `${date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeStr}`
+        return `${date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}, ${timeStr}`;
       }
     } catch {
-      return isoString
+      return isoString;
     }
-  }
+  };
 
   return (
     <div className="space-y-6">
@@ -77,7 +75,9 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
             {loadingMeetings ? (
               <li className="text-xs text-gray-400">Loading...</li>
             ) : upcomingMeetings.length === 0 ? (
-              <li className="text-xs text-gray-400">No upcoming meetings. Connect your calendar in Settings.</li>
+              <li className="text-xs text-gray-400">
+                No upcoming meetings. Connect your calendar in Settings.
+              </li>
             ) : (
               upcomingMeetings.slice(0, 5).map((meeting, i) => (
                 <li key={i} className="text-xs text-gray-500 flex gap-2">
@@ -173,41 +173,45 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
       <div className="card">
         <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
         <div className="flex gap-4">
-          <button className="btn-primary" onClick={() => onNavigate?.('clients')}>Add New Client</button>
-          <button className="btn-secondary" onClick={() => onNavigate?.('meetings')}>Start Recording</button>
+          <button className="btn-primary" onClick={() => onNavigate?.("clients")}>
+            Add New Client
+          </button>
+          <button className="btn-secondary" onClick={() => onNavigate?.("meetings")}>
+            Start Recording
+          </button>
           <button
             className="btn-secondary"
             disabled={syncing}
             onClick={async () => {
-              setSyncing(true)
-              setSyncResult(null)
+              setSyncing(true);
+              setSyncResult(null);
               try {
-                for (const provider of ['google', 'microsoft']) {
+                for (const provider of ["google", "microsoft"]) {
                   try {
-                    const status: any = await invoke('check_oauth_status', { provider })
+                    const status: any = await invoke("check_oauth_status", { provider });
                     if (status.connected) {
-                      const r: any = await invoke('sync_emails', { provider })
-                      setSyncResult(`Imported ${r.imported_count} document${r.imported_count !== 1 ? 's' : ''}`)
+                      const r: any = await invoke("sync_emails", { provider });
+                      setSyncResult(
+                        `Imported ${r.imported_count} document${r.imported_count !== 1 ? "s" : ""}`,
+                      );
                     }
                   } catch (_) {}
                 }
-                if (!syncResult) setSyncResult('Sync complete')
+                if (!syncResult) setSyncResult("Sync complete");
               } catch (err: any) {
-                setSyncResult(`Sync failed: ${err}`)
+                setSyncResult(`Sync failed: ${err}`);
               } finally {
-                setSyncing(false)
+                setSyncing(false);
               }
             }}
           >
-            {syncing ? 'Syncing...' : 'Sync Emails'}
+            {syncing ? "Syncing..." : "Sync Emails"}
           </button>
         </div>
-        {syncResult && (
-          <p className="text-sm text-gray-600 mt-2">{syncResult}</p>
-        )}
+        {syncResult && <p className="text-sm text-gray-600 mt-2">{syncResult}</p>}
       </div>
     </div>
-  )
+  );
 }
 
-export default Dashboard
+export default Dashboard;
