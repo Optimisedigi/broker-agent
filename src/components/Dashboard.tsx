@@ -22,8 +22,6 @@ const awaitingResponse = ["Mark Thompson", "Priya Sharma", "David Chen"];
 function Dashboard({ stats, onNavigate }: DashboardProps) {
   const [upcomingMeetings, setUpcomingMeetings] = useState<UpcomingMeeting[]>([]);
   const [loadingMeetings, setLoadingMeetings] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   useEffect(() => {
     loadUpcomingMeetings();
@@ -67,8 +65,8 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
   return (
     <div className="space-y-6">
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+        <div className="card md:col-span-4">
           <p className="text-xs text-gray-500">Meetings Coming Up</p>
           <p className="text-3xl font-bold text-primary-600">{upcomingMeetings.length}</p>
           <ul className="mt-3 space-y-1">
@@ -80,17 +78,24 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
               </li>
             ) : (
               upcomingMeetings.slice(0, 5).map((meeting, i) => (
-                <li key={i} className="text-xs text-gray-500 flex gap-2">
-                  <span className="font-medium text-gray-700 truncate">
-                    {meeting.client_name || meeting.title}
+                <li key={i} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate min-w-0">
+                    {meeting.client_name ? (
+                      <>
+                        <span className="font-medium text-gray-700">{meeting.client_name}</span>
+                        {meeting.title && <span className="text-gray-400 ml-1">| {meeting.title}</span>}
+                      </>
+                    ) : (
+                      <span className="font-medium text-gray-700">{meeting.title}</span>
+                    )}
                   </span>
-                  <span className="flex-shrink-0">{formatMeetingTime(meeting.start_time)}</span>
+                  <span className="text-gray-400 whitespace-nowrap flex-shrink-0">{formatMeetingTime(meeting.start_time)}</span>
                 </li>
               ))
             )}
           </ul>
         </div>
-        <div className="card">
+        <div className="card md:col-span-4">
           <p className="text-xs text-gray-500">Clients Awaiting Response</p>
           <p className="text-3xl font-bold text-amber-600">8</p>
           <ul className="mt-3 space-y-1">
@@ -101,12 +106,12 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
             ))}
           </ul>
         </div>
-        <div className="card">
+        <div className="card md:col-span-2">
           <p className="text-xs text-gray-500">Clients In Progress</p>
           <p className="text-3xl font-bold text-primary-600">12</p>
           <p className="text-xs text-gray-400 mt-3">Active pipeline</p>
         </div>
-        <div className="card">
+        <div className="card md:col-span-2">
           <p className="text-xs text-gray-500">Clients Converted</p>
           <p className="text-3xl font-bold text-green-600">34</p>
           <p className="text-xs text-gray-400 mt-3">Successful deals</p>
@@ -179,36 +184,7 @@ function Dashboard({ stats, onNavigate }: DashboardProps) {
           <button className="btn-secondary" onClick={() => onNavigate?.("meetings")}>
             Start Recording
           </button>
-          <button
-            className="btn-secondary"
-            disabled={syncing}
-            onClick={async () => {
-              setSyncing(true);
-              setSyncResult(null);
-              try {
-                for (const provider of ["google", "microsoft"]) {
-                  try {
-                    const status: any = await invoke("check_oauth_status", { provider });
-                    if (status.connected) {
-                      const r: any = await invoke("sync_emails", { provider });
-                      setSyncResult(
-                        `Imported ${r.imported_count} document${r.imported_count !== 1 ? "s" : ""}`,
-                      );
-                    }
-                  } catch (_) {}
-                }
-                if (!syncResult) setSyncResult("Sync complete");
-              } catch (err: any) {
-                setSyncResult(`Sync failed: ${err}`);
-              } finally {
-                setSyncing(false);
-              }
-            }}
-          >
-            {syncing ? "Syncing..." : "Sync Emails"}
-          </button>
         </div>
-        {syncResult && <p className="text-sm text-gray-600 mt-2">{syncResult}</p>}
       </div>
     </div>
   );

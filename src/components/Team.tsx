@@ -72,9 +72,20 @@ function getRankLabel(rank: number) {
   return `${rank}th`;
 }
 
+const DUMMY_REFERRAL_SOURCES = [
+  { source: "Word of Mouth", count: 23 },
+  { source: "Google Ads", count: 18 },
+  { source: "Organic", count: 15 },
+  { source: "Google Search", count: 12 },
+  { source: "Facebook Ad", count: 9 },
+  { source: "Social Video", count: 7 },
+  { source: "Friend", count: 6 },
+];
+
 function Team({ profile }: TeamProps) {
   const profileName = profile?.name || "";
   const [referralStats, setReferralStats] = useState<ReferralStat[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState("last_month");
 
   useEffect(() => {
     invoke<ReferralStat[]>("get_referral_stats")
@@ -107,6 +118,19 @@ function Team({ profile }: TeamProps) {
 
   return (
     <div className="space-y-6">
+      {/* Date Filter */}
+      <div className="flex justify-end">
+        <select
+          value={selectedMonth}
+          onChange={(e) => setSelectedMonth(e.target.value)}
+          className="text-xs border border-gray-200 rounded px-1.5 py-0.5 text-gray-500"
+        >
+          <option value="last_month">Last month</option>
+          <option value="this_month">This month</option>
+          <option value="last_3_months">Last 3 months</option>
+        </select>
+      </div>
+
       {/* Team Stats */}
       <div className="grid grid-cols-4 gap-4">
         <div className="card">
@@ -115,15 +139,9 @@ function Team({ profile }: TeamProps) {
           <p className="text-xs text-gray-400 mt-1">Active brokers</p>
         </div>
         <div className="card">
-          <p className="text-sm text-gray-500">Top Referral Source</p>
-          <p className="text-2xl font-bold text-gray-900">
-            {referralStats.length > 0 ? referralStats[0]!.source : "N/A"}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            {referralStats.length > 0
-              ? `${referralStats[0]!.count} client${referralStats[0]!.count !== 1 ? "s" : ""}`
-              : "No data yet"}
-          </p>
+          <p className="text-sm text-gray-500">Current Clients Speaking To</p>
+          <p className="text-2xl font-bold text-gray-900">14</p>
+          <p className="text-xs text-gray-400 mt-1">Active conversations</p>
         </div>
         <div className="card">
           <p className="text-sm text-gray-500">Team Pipeline Value</p>
@@ -243,6 +261,34 @@ function Team({ profile }: TeamProps) {
               })}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Referral Sources */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Referral Sources</h3>
+          <span className="text-sm text-gray-500">
+            {DUMMY_REFERRAL_SOURCES.reduce((sum, s) => sum + s.count, 0)} total leads
+          </span>
+        </div>
+        <div className="space-y-3">
+          {DUMMY_REFERRAL_SOURCES.map((stat) => (
+            <div key={stat.source} className="flex items-center gap-3">
+              <span className="text-sm text-gray-700 w-36 flex-shrink-0 truncate">
+                {stat.source}
+              </span>
+              <div className="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden">
+                <div
+                  className="bg-primary-500 h-full rounded-full transition-all"
+                  style={{ width: `${(stat.count / DUMMY_REFERRAL_SOURCES[0]!.count) * 100}%` }}
+                />
+              </div>
+              <span className="text-sm font-medium text-gray-900 w-8 text-right">
+                {stat.count}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 

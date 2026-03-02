@@ -19,6 +19,11 @@ export interface Client {
   client_status: string;
   referral_source?: string;
   pipeline_stage?: string;
+  current_lender?: string;
+  current_loan_balance?: number;
+  current_interest_rate?: number;
+  current_loan_type?: string;
+  ai_summary?: string;
   created_at: string;
   updated_at: string;
 }

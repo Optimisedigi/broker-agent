@@ -6,7 +6,7 @@ use crate::db::{AppState, Document};
 pub fn get_client_documents(state: State<AppState>, client_id: i64) -> Result<Vec<Document>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, client_id, filename, document_type, file_path, uploaded_at FROM documents WHERE client_id = ?1 ORDER BY uploaded_at DESC")
+        .prepare("SELECT id, client_id, filename, document_type, file_path, source, uploaded_at FROM documents WHERE client_id = ?1 ORDER BY uploaded_at DESC")
         .map_err(|e| e.to_string())?;
 
     let docs = stmt
@@ -18,7 +18,8 @@ pub fn get_client_documents(state: State<AppState>, client_id: i64) -> Result<Ve
                 document_type: row.get(3)?,
                 file_path: row.get(4)?,
                 file_data: None,
-                uploaded_at: row.get(5)?,
+                source: row.get(5)?,
+                uploaded_at: row.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?

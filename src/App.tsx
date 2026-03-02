@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import BankPolicies from "./components/BankPolicies";
 import Clients from "./components/Clients";
 import Dashboard from "./components/Dashboard";
@@ -15,6 +15,9 @@ function App() {
   const [logo, setLogo] = useState<string | null>(null);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [profile, setProfile] = useState<{ name: string; photo: string | null } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(() => {
     const saved = localStorage.getItem("content_zoom");
     return saved ? parseFloat(saved) : 80;
@@ -42,6 +45,35 @@ function App() {
     const saved = localStorage.getItem("broker_logo");
     if (saved) setLogo(saved);
   }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [currentView]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      let result = "";
+      for (const provider of ["google", "microsoft"]) {
+        try {
+          const status: any = await invoke("check_oauth_status", { provider });
+          if (status.connected) {
+            const r: any = await invoke("sync_emails", { provider });
+            result = `Imported ${r.imported_count} document${r.imported_count !== 1 ? "s" : ""}`;
+          }
+        } catch (_) {}
+      }
+      setSyncResult(result || "Sync complete");
+    } catch (err: any) {
+      setSyncResult(`Sync failed: ${err}`);
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncResult(null), 4000);
+    }
+  };
 
   const loadDashboardStats = async () => {
     try {
@@ -208,7 +240,7 @@ function App() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto relative">
+      <div className="flex-1 overflow-auto relative" ref={scrollRef}>
         <div
           style={{
             transform: `scale(${zoom / 100})`,
@@ -238,6 +270,24 @@ function App() {
                     month: "long",
                     day: "numeric",
                   })}
+                </div>
+                <div className="relative">
+                  <button
+                    onClick={handleSync}
+                    disabled={syncing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+                    title="Sync emails & documents"
+                  >
+                    <svg className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    {syncing ? "Syncing..." : "Sync"}
+                  </button>
+                  {syncResult && (
+                    <div className="absolute top-full right-0 mt-1 text-xs text-gray-600 bg-white border rounded-lg px-2 py-1 shadow-sm whitespace-nowrap z-10">
+                      {syncResult}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={() => setCurrentView("settings")}

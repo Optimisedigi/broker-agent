@@ -6,7 +6,7 @@ use crate::db::{get_opt_f64, AppState, Client};
 pub fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at FROM clients ORDER BY created_at DESC")
+        .prepare("SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at, ai_summary FROM clients ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
 
     let clients = stmt
@@ -32,8 +32,13 @@ pub fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
                 client_status: row.get::<_, Option<String>>(17)?.unwrap_or_else(|| "existing".to_string()),
                 referral_source: row.get(18)?,
                 pipeline_stage: row.get(19)?,
-                created_at: row.get(20)?,
-                updated_at: row.get(21)?,
+                current_lender: row.get(20)?,
+                current_loan_balance: get_opt_f64(row, 21)?,
+                current_interest_rate: get_opt_f64(row, 22)?,
+                current_loan_type: row.get(23)?,
+                created_at: row.get(24)?,
+                updated_at: row.get(25)?,
+                ai_summary: row.get(26)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -49,8 +54,8 @@ pub fn create_client(state: State<AppState>, client: Client) -> Result<i64, Stri
     let now = chrono::Local::now().to_rfc3339();
 
     conn.execute(
-        "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         rusqlite::params![
             client.first_name,
             client.last_name,
@@ -71,6 +76,10 @@ pub fn create_client(state: State<AppState>, client: Client) -> Result<i64, Stri
             client.client_status,
             client.referral_source.clone().unwrap_or_default(),
             client.pipeline_stage.clone().unwrap_or_else(|| "lead_received".to_string()),
+            client.current_lender.clone().unwrap_or_default(),
+            client.current_loan_balance,
+            client.current_interest_rate,
+            client.current_loan_type.clone().unwrap_or_default(),
             now,
             now,
         ],
@@ -87,7 +96,7 @@ pub fn update_client(state: State<AppState>, client: Client) -> Result<(), Strin
     let client_id = client.id.ok_or("Client ID is required for update")?;
 
     conn.execute(
-        "UPDATE clients SET first_name = ?1, last_name = ?2, email = ?3, phone = ?4, income = ?5, payg = ?6, assets = ?7, liabilities = ?8, notes = ?9, home_address = ?10, investment_addresses = ?11, properties_viewing = ?12, available_deposit = ?13, monthly_expenses = ?14, goals = ?15, home_ownership = ?16, client_status = ?17, referral_source = ?18, pipeline_stage = ?19, updated_at = ?20 WHERE id = ?21",
+        "UPDATE clients SET first_name = ?1, last_name = ?2, email = ?3, phone = ?4, income = ?5, payg = ?6, assets = ?7, liabilities = ?8, notes = ?9, home_address = ?10, investment_addresses = ?11, properties_viewing = ?12, available_deposit = ?13, monthly_expenses = ?14, goals = ?15, home_ownership = ?16, client_status = ?17, referral_source = ?18, pipeline_stage = ?19, current_lender = ?20, current_loan_balance = ?21, current_interest_rate = ?22, current_loan_type = ?23, updated_at = ?24 WHERE id = ?25",
         rusqlite::params![
             client.first_name,
             client.last_name,
@@ -108,6 +117,10 @@ pub fn update_client(state: State<AppState>, client: Client) -> Result<(), Strin
             client.client_status,
             client.referral_source.clone().unwrap_or_default(),
             client.pipeline_stage.clone().unwrap_or_else(|| "lead_received".to_string()),
+            client.current_lender.clone().unwrap_or_default(),
+            client.current_loan_balance,
+            client.current_interest_rate,
+            client.current_loan_type.clone().unwrap_or_default(),
             now,
             client_id,
         ],
@@ -142,7 +155,7 @@ pub fn find_client_by_email(state: State<AppState>, email: String) -> Result<Opt
     let conn = state.db.lock().map_err(|e| e.to_string())?;
 
     let result = conn.query_row(
-        "SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, created_at, updated_at
+        "SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at, ai_summary
          FROM clients WHERE email = ?1",
         [&email],
         |row| {
@@ -167,8 +180,13 @@ pub fn find_client_by_email(state: State<AppState>, email: String) -> Result<Opt
                 client_status: row.get::<_, Option<String>>(17)?.unwrap_or_else(|| "existing".to_string()),
                 referral_source: row.get(18)?,
                 pipeline_stage: row.get(19)?,
-                created_at: row.get(20)?,
-                updated_at: row.get(21)?,
+                current_lender: row.get(20)?,
+                current_loan_balance: row.get(21)?,
+                current_interest_rate: row.get(22)?,
+                current_loan_type: row.get(23)?,
+                created_at: row.get(24)?,
+                updated_at: row.get(25)?,
+                ai_summary: row.get(26)?,
             })
         },
     );

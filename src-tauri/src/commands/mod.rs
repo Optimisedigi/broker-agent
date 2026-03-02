@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod broker;
 pub mod clients;
 pub mod dashboard;

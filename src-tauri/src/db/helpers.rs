@@ -57,7 +57,7 @@ pub fn do_import_email_document(
 ) -> Result<i64, String> {
     let client_id: Option<i64> = conn
         .query_row(
-            "SELECT id FROM clients WHERE email = ?1",
+            "SELECT id FROM clients WHERE LOWER(email) = LOWER(?1)",
             [sender_email],
             |row| row.get(0),
         )
@@ -75,6 +75,27 @@ pub fn do_import_email_document(
         .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| subject.to_string());
+
+    // Skip if this document was already imported for this client
+    let already_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE client_id = ?1 AND file_path = ?2",
+            rusqlite::params![client_id, document_path],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if already_exists {
+        let doc_id: i64 = conn
+            .query_row(
+                "SELECT id FROM documents WHERE client_id = ?1 AND file_path = ?2",
+                rusqlite::params![client_id, document_path],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        return Ok(doc_id);
+    }
 
     let document_type = classify_document_type(&filename, subject);
 
@@ -94,14 +115,15 @@ pub fn do_import_email_document(
 
     let now = chrono::Local::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO documents (client_id, filename, document_type, file_path, file_data, uploaded_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO documents (client_id, filename, document_type, file_path, file_data, source, uploaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         [
             &client_id.to_string(),
             &filename,
             document_type,
             document_path,
             &file_data,
+            "client",
             &now,
         ],
     )
