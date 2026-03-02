@@ -10,6 +10,45 @@ use tokio::net::TcpListener;
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
+// HTML stripping helper
+// ---------------------------------------------------------------------------
+
+fn strip_html_to_text(html: &str) -> String {
+    // Remove style and script blocks entirely
+    let re_style = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
+    let text = re_style.replace_all(html, "");
+    let re_script = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
+    let text = re_script.replace_all(&text, "");
+
+    // Replace <br>, <p>, <div>, <tr>, <li> with newlines
+    let re_block = regex::Regex::new(r"(?i)<(br|/p|/div|/tr|/li|/h[1-6])[^>]*>").unwrap();
+    let text = re_block.replace_all(&text, "\n");
+
+    // Remove all remaining HTML tags
+    let re_tags = regex::Regex::new(r"<[^>]+>").unwrap();
+    let text = re_tags.replace_all(&text, "");
+
+    // Decode common HTML entities
+    let text = text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ");
+
+    // Collapse multiple whitespace/newlines
+    let re_spaces = regex::Regex::new(r"[ \t]+").unwrap();
+    let text = re_spaces.replace_all(&text, " ");
+    let re_newlines = regex::Regex::new(r"\n{3,}").unwrap();
+    let text = re_newlines.replace_all(&text, "\n\n");
+
+    text.trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -17,6 +56,7 @@ use crate::AppState;
 const GOOGLE_CLIENT_ID: &str = "706581607048-l3vj1b0gg3v7gt2b7ge5300dd76f92rf.apps.googleusercontent.com";
 const GOOGLE_CLIENT_SECRET: &str = "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";
 const MICROSOFT_CLIENT_ID: &str = "e01aaedb-6e8b-4bbf-8220-a512eaed8956";
+const MICROSOFT_CLIENT_SECRET: &str = "Sew8Q~HuaU89VSqI18KBuk7Z2RdVa_qRirNdYa0a";
 
 const REDIRECT_URI: &str = "http://localhost:9876/callback";
 
@@ -54,6 +94,16 @@ pub struct CalendarEvent {
 pub struct SyncResult {
     pub imported_count: usize,
     pub documents: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SyncedEmail {
+    sender: String,
+    subject: String,
+    attachment_paths: Vec<String>,
+    body: Option<String>,
+    received_at: Option<String>,
+    message_id: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -139,6 +189,18 @@ struct GraphMessage {
     id: String,
     subject: Option<String>,
     from: Option<GraphFrom>,
+    body: Option<GraphBody>,
+    #[serde(rename = "receivedDateTime", default)]
+    received_date_time: Option<String>,
+    #[serde(rename = "hasAttachments", default)]
+    has_attachments: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct GraphBody {
+    content: Option<String>,
+    #[serde(rename = "contentType", default)]
+    content_type: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -296,6 +358,8 @@ async fn get_valid_token(
     ];
     if provider == "google" {
         form_params.push(("client_secret", GOOGLE_CLIENT_SECRET));
+    } else if provider == "microsoft" {
+        form_params.push(("client_secret", MICROSOFT_CLIENT_SECRET));
     }
 
     let resp = http
@@ -390,6 +454,8 @@ pub async fn start_oauth(
     ];
     if provider == "google" {
         form_params.push(("client_secret", GOOGLE_CLIENT_SECRET));
+    } else if provider == "microsoft" {
+        form_params.push(("client_secret", MICROSOFT_CLIENT_SECRET));
     }
     let resp = http
         .post(token_url)
@@ -545,9 +611,10 @@ pub async fn sync_emails(
             .prepare("SELECT email FROM clients WHERE email IS NOT NULL AND email != ''")
             .map_err(|e| e.to_string())?;
         let emails: Vec<String> = stmt
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| row.get::<_, String>(0).map(|s| s.trim().to_string()))
             .map_err(|e| e.to_string())?
             .filter_map(|r| r.ok())
+            .filter(|e| !e.is_empty())
             .collect();
 
         let last_sync: Option<String> = conn
@@ -578,7 +645,7 @@ pub async fn sync_emails(
         .map_err(|e| format!("Failed to create import dir: {}", e))?;
 
     let http = HttpClient::new();
-    let imported_docs: Vec<(String, String, String)> = match provider.as_str() {
+    let synced_emails: Vec<SyncedEmail> = match provider.as_str() {
         "google" => {
             sync_gmail(&http, &access_token, &client_emails, &import_dir, &last_sync_at).await?
         }
@@ -588,22 +655,119 @@ pub async fn sync_emails(
         _ => return Err("Unknown provider".to_string()),
     };
 
-    // Import documents into DB
-    let doc_names: Vec<String> = imported_docs
-        .iter()
-        .map(|(_, subj, path)| {
-            let fname = std::path::Path::new(path)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| subj.clone());
-            fname
-        })
-        .collect();
+    // Import documents and create email meeting records
+    let mut doc_names: Vec<String> = Vec::new();
+    // Collect (meeting_id, plain_text) for AI summary generation after lock release
+    let mut new_email_meetings: Vec<(i64, String)> = Vec::new();
 
     {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        for (sender, subject, path) in &imported_docs {
-            let _ = crate::do_import_email_document(&conn, sender, subject, path);
+        for email in &synced_emails {
+            // Import attachments
+            for path in &email.attachment_paths {
+                if let Err(e) = crate::do_import_email_document(&conn, &email.sender, &email.subject, path) {
+                    eprintln!("[Sync] Failed to import document from {}: {}", email.sender, e);
+                } else {
+                    let fname = std::path::Path::new(path)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| email.subject.clone());
+                    doc_names.push(fname);
+                }
+            }
+
+            // Create email meeting record (dedup by external_id)
+            if !email.message_id.is_empty() {
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM meetings WHERE external_id = ?1",
+                        [&email.message_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0) > 0;
+
+                if !exists {
+                    // Find client by email (case-insensitive)
+                    let client_id: Option<i64> = conn
+                        .query_row(
+                            "SELECT id FROM clients WHERE LOWER(email) = LOWER(?1)",
+                            [&email.sender],
+                            |row| row.get(0),
+                        )
+                        .ok();
+
+                    if let Some(cid) = client_id {
+                        let meeting_date = email.received_at.clone().unwrap_or_else(|| chrono::Local::now().to_rfc3339());
+
+                        // Strip HTML from email body to plain text
+                        let mut plain_text = match &email.body {
+                            Some(b) => strip_html_to_text(b),
+                            None => String::new(),
+                        };
+
+                        // Append attachment filenames if any
+                        if !email.attachment_paths.is_empty() {
+                            let filenames: Vec<String> = email.attachment_paths.iter()
+                                .filter_map(|p| std::path::Path::new(p).file_name().map(|f| f.to_string_lossy().to_string()))
+                                .collect();
+                            plain_text.push_str(&format!(
+                                "\n\nAttachments ({}): {}",
+                                filenames.len(),
+                                filenames.join(", ")
+                            ));
+                        }
+
+                        // Insert with plain text in notes, summary will be filled by AI
+                        if let Err(e) = conn.execute(
+                            "INSERT INTO meetings (client_id, title, recording_path, transcript, summary, meeting_date, duration_seconds, notes, meeting_type, external_id)
+                             VALUES (?1, ?2, '', '', '', ?3, NULL, ?4, 'email', ?5)",
+                            rusqlite::params![
+                                cid,
+                                email.subject,
+                                meeting_date,
+                                plain_text,
+                                email.message_id,
+                            ],
+                        ) {
+                            eprintln!("[Sync] Failed to create email meeting record: {}", e);
+                        } else {
+                            let meeting_id = conn.last_insert_rowid();
+                            new_email_meetings.push((meeting_id, plain_text.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Repair: create email meeting records for any email_imports without corresponding meetings
+        let mut repair_stmt = conn
+            .prepare(
+                "SELECT ei.client_id, ei.subject, ei.imported_at, ei.sender_email
+                 FROM email_imports ei
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM meetings m
+                     WHERE m.client_id = ei.client_id AND m.meeting_type = 'email' AND m.title = ei.subject
+                 )
+                 GROUP BY ei.client_id, ei.subject",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let repairs: Vec<(i64, String, String, String)> = repair_stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (cid, subject, imported_at, _sender) in &repairs {
+            if let Err(e) = conn.execute(
+                "INSERT INTO meetings (client_id, title, recording_path, transcript, summary, meeting_date, duration_seconds, notes, meeting_type)
+                 VALUES (?1, ?2, '', '', '', ?3, NULL, '', 'email')",
+                rusqlite::params![cid, subject, imported_at],
+            ) {
+                eprintln!("[Sync] Failed to repair email meeting record: {}", e);
+            }
         }
 
         // Update last_sync_at
@@ -613,6 +777,39 @@ pub async fn sync_emails(
             rusqlite::params![now, now, provider],
         )
         .map_err(|e| e.to_string())?;
+    }
+    // Lock released - now generate AI summaries for new emails (async-safe)
+    for (meeting_id, plain_text) in &new_email_meetings {
+        if plain_text.trim().is_empty() {
+            continue;
+        }
+
+        let system_prompt = "You are an AI assistant for a mortgage broker. Write a 1-3 line summary of this email so the broker can skip reading it. \
+            Extract: what the client wants or is providing, any dollar figures or rates mentioned, and what documents are attached. \
+            Be direct and specific. No filler. Use plain text, not markdown.";
+
+        match crate::commands::ai::call_moonshot(system_prompt, plain_text).await {
+            Ok(summary) => {
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                if let Err(e) = conn.execute(
+                    "UPDATE meetings SET summary = ?1 WHERE id = ?2",
+                    rusqlite::params![summary, meeting_id],
+                ) {
+                    eprintln!("[Sync] Failed to save AI email summary: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("[Sync] AI summary failed for meeting {}: {}", meeting_id, e);
+                // Fallback: use the plain text as the summary
+                let conn = state.db.lock().map_err(|e| e.to_string())?;
+                if let Err(e2) = conn.execute(
+                    "UPDATE meetings SET summary = ?1 WHERE id = ?2",
+                    rusqlite::params![plain_text, meeting_id],
+                ) {
+                    eprintln!("[Sync] Failed to save fallback summary: {}", e2);
+                }
+            }
+        }
     }
 
     Ok(SyncResult {
@@ -648,7 +845,7 @@ async fn sync_gmail(
     client_emails: &[String],
     import_dir: &std::path::Path,
     last_sync_at: &Option<String>,
-) -> Result<Vec<(String, String, String)>, String> {
+) -> Result<Vec<SyncedEmail>, String> {
     let mut imported = Vec::new();
 
     // Build query
@@ -722,6 +919,7 @@ async fn sync_gmail(
         }
 
         // Download attachments
+        let mut attachment_paths = Vec::new();
         if let Some(ref parts) = payload.parts {
             for part in parts {
                 let filename = match &part.filename {
@@ -760,13 +958,18 @@ async fn sync_gmail(
                 std::fs::write(&file_path, &data)
                     .map_err(|e| format!("Failed to save attachment: {}", e))?;
 
-                imported.push((
-                    sender.clone(),
-                    subject.clone(),
-                    file_path.to_string_lossy().to_string(),
-                ));
+                attachment_paths.push(file_path.to_string_lossy().to_string());
             }
         }
+
+        imported.push(SyncedEmail {
+            sender: sender.clone(),
+            subject: subject.clone(),
+            attachment_paths,
+            body: None,
+            received_at: None,
+            message_id: msg.id.clone(),
+        });
     }
 
     Ok(imported)
@@ -782,13 +985,14 @@ async fn sync_outlook(
     client_emails: &[String],
     import_dir: &std::path::Path,
     last_sync_at: &Option<String>,
-) -> Result<Vec<(String, String, String)>, String> {
+) -> Result<Vec<SyncedEmail>, String> {
     let mut imported = Vec::new();
 
     for email in client_emails {
+        let email_lower = email.to_lowercase();
         let mut filter = format!(
-            "from/emailAddress/address eq '{}' and hasAttachments eq true",
-            email
+            "from/emailAddress/address eq '{}'",
+            email_lower
         );
 
         if let Some(ref since) = last_sync_at {
@@ -801,7 +1005,7 @@ async fn sync_outlook(
         }
 
         let list_url = format!(
-            "https://graph.microsoft.com/v1.0/me/messages?$filter={}&$top=20&$select=id,subject,from",
+            "https://graph.microsoft.com/v1.0/me/messages?$filter={}&$top=20&$select=id,subject,from,body,receivedDateTime,hasAttachments",
             urlencoding::encode(&filter)
         );
 
@@ -813,6 +1017,9 @@ async fn sync_outlook(
             .map_err(|e| format!("Outlook list failed: {}", e))?;
 
         if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            eprintln!("[Sync] Outlook filter failed for {} ({}): {}", email, status, body);
             continue;
         }
 
@@ -825,57 +1032,65 @@ async fn sync_outlook(
                 .map(|f| f.email_address.address.clone())
                 .unwrap_or_default();
             let subject = msg.subject.clone().unwrap_or_default();
+            let body = msg.body.as_ref().and_then(|b| b.content.clone());
+            let received_at = msg.received_date_time.clone();
 
-            let att_url = format!(
-                "https://graph.microsoft.com/v1.0/me/messages/{}/attachments",
-                msg.id
-            );
-            let att_resp = http
-                .get(&att_url)
-                .bearer_auth(token)
-                .send()
-                .await
-                .map_err(|e| e.to_string())?;
+            // Only fetch attachments if the message has them
+            let mut attachment_paths = Vec::new();
+            if msg.has_attachments {
+                let att_url = format!(
+                    "https://graph.microsoft.com/v1.0/me/messages/{}/attachments",
+                    msg.id
+                );
+                let att_resp = http
+                    .get(&att_url)
+                    .bearer_auth(token)
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
 
-            if !att_resp.status().is_success() {
-                continue;
-            }
+                if att_resp.status().is_success() {
+                    let att_list: GraphAttachmentList =
+                        att_resp.json().await.map_err(|e| e.to_string())?;
 
-            let att_list: GraphAttachmentList =
-                att_resp.json().await.map_err(|e| e.to_string())?;
+                    for att in &att_list.value {
+                        let is_file = att
+                            .odata_type
+                            .as_ref()
+                            .map(|t| t.contains("fileAttachment"))
+                            .unwrap_or(false);
+                        if !is_file {
+                            continue;
+                        }
 
-            for att in &att_list.value {
-                // Only process file attachments
-                let is_file = att
-                    .odata_type
-                    .as_ref()
-                    .map(|t| t.contains("fileAttachment"))
-                    .unwrap_or(false);
-                if !is_file {
-                    continue;
+                        let filename = att.name.clone().unwrap_or_else(|| "attachment".to_string());
+                        let content = match &att.content_bytes {
+                            Some(c) => c,
+                            None => continue,
+                        };
+
+                        use base64::engine::general_purpose::STANDARD;
+                        let data = STANDARD
+                            .decode(content)
+                            .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+                        let file_path = import_dir.join(&filename);
+                        std::fs::write(&file_path, &data)
+                            .map_err(|e| format!("Failed to save attachment: {}", e))?;
+
+                        attachment_paths.push(file_path.to_string_lossy().to_string());
+                    }
                 }
-
-                let filename = att.name.clone().unwrap_or_else(|| "attachment".to_string());
-                let content = match &att.content_bytes {
-                    Some(c) => c,
-                    None => continue,
-                };
-
-                use base64::engine::general_purpose::STANDARD;
-                let data = STANDARD
-                    .decode(content)
-                    .map_err(|e| format!("Base64 decode error: {}", e))?;
-
-                let file_path = import_dir.join(&filename);
-                std::fs::write(&file_path, &data)
-                    .map_err(|e| format!("Failed to save attachment: {}", e))?;
-
-                imported.push((
-                    sender.clone(),
-                    subject.clone(),
-                    file_path.to_string_lossy().to_string(),
-                ));
             }
+
+            imported.push(SyncedEmail {
+                sender,
+                subject,
+                attachment_paths,
+                body,
+                received_at,
+                message_id: msg.id.clone(),
+            });
         }
     }
 

@@ -5,6 +5,12 @@ import { formatDuration, getFileExtension } from "../utils/formatters";
 import type { BankPolicy, Client } from "../utils/policyMatching";
 import { calculatePolicyMatches } from "../utils/policyMatching";
 
+function stripHtmlToText(html: string): string {
+  if (!html.includes("<")) return html;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (doc.body.textContent || "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 interface Document {
   id?: number;
   client_id: number;
@@ -12,6 +18,7 @@ interface Document {
   document_type: string;
   file_path: string;
   file_data?: string;
+  source?: string;
   uploaded_at: string;
 }
 
@@ -27,6 +34,9 @@ interface Meeting {
   meeting_date: string;
   duration_seconds?: number;
   notes?: string;
+  meeting_type?: string;
+  external_id?: string;
+  broker_notes?: string;
 }
 
 interface Deal {
@@ -123,7 +133,7 @@ function Clients() {
     pipeline_stage: "lead_received",
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadDocType, setUploadDocType] = useState("bank_statement");
+  const [uploadDocType] = useState("other");
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
   const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
   const [editedSummary, setEditedSummary] = useState("");
@@ -152,7 +162,12 @@ function Clients() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [editingAiSummary, setEditingAiSummary] = useState(false);
   const [aiSummaryText, setAiSummaryText] = useState("");
+  const [generatingClientSummary, setGeneratingClientSummary] = useState(false);
+  const [generatingMeetingSummaryId, setGeneratingMeetingSummaryId] = useState<number | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [transcriptExpanded, setTranscriptExpanded] = useState<number | null>(null);
+  const [editingNotesId, setEditingNotesId] = useState<number | null>(null);
+  const [editedNotes, setEditedNotes] = useState("");
   const [editingProfile, setEditingProfile] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Client>>({});
   const [renamingDocId, setRenamingDocId] = useState<number | null>(null);
@@ -223,6 +238,7 @@ function Clients() {
 
   const handleSelectClient = (client: Client) => {
     setSelectedClient(client);
+    setAiSummaryText(client.ai_summary || "");
     if (client.id) {
       loadClientDocuments(client.id);
       loadClientMeetings(client.id);
@@ -376,8 +392,11 @@ function Clients() {
     }
   };
 
-  const getDocCountByType = (type: string) => {
-    return clientDocuments.filter((d) => d.document_type === type).length;
+  const formatMeetingDate = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-AU', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    });
   };
 
   const renderDocumentPreview = () => {
@@ -889,26 +908,55 @@ function Clients() {
                 AI Generated
               </span>
             </div>
-            {!editingAiSummary && (
-              <button
-                onClick={() => {
-                  setEditingAiSummary(true);
-                  setAiSummaryText(
-                    aiSummaryText ||
-                      `${selectedClient.first_name} ${selectedClient.last_name} is an experienced property investor with a household income of $${(selectedClient.income || 0).toLocaleString()} and current portfolio of ${selectedClient.investment_addresses ? selectedClient.investment_addresses.split("\n").filter(Boolean).length : 0} investment properties. Total estimated assets are $${(selectedClient.assets || 0).toLocaleString()} against liabilities of $${(selectedClient.liabilities || 0).toLocaleString()}, with $${(selectedClient.available_deposit || 0).toLocaleString()} available as deposit for new acquisitions.\n\nCurrent strategy focuses on building a property portfolio in Sydney's Eastern Suburbs and North Shore. ${selectedClient.first_name} is well-organised and has a strong serviceability position, with rental income from existing properties supporting further borrowing capacity. Monthly expenses are $${(selectedClient.monthly_expenses || 0).toLocaleString()}.\n\nKey action items: Review rate competitiveness on existing loans, explore equity release for next acquisition, and continue monitoring properties in target suburbs.`,
-                  );
-                }}
-                className="text-xs text-primary-600 hover:text-primary-800 font-medium"
-              >
-                Edit
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {!editingAiSummary && !generatingClientSummary && (
+                <button
+                  onClick={async () => {
+                    if (!selectedClient.id) return;
+                    setGeneratingClientSummary(true);
+                    setAiError(null);
+                    try {
+                      const summary = await invoke<string>("generate_client_summary", { clientId: selectedClient.id });
+                      setAiSummaryText(summary);
+                      setSelectedClient({ ...selectedClient, ai_summary: summary });
+                      setClients((prev) => prev.map((c) => c.id === selectedClient.id ? { ...c, ai_summary: summary } : c));
+                    } catch (error) {
+                      console.error("Failed to generate client summary:", error);
+                      setAiError(String(error));
+                    } finally {
+                      setGeneratingClientSummary(false);
+                    }
+                  }}
+                  className="text-xs px-3 py-1 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"
+                >
+                  {aiSummaryText ? "Regenerate with AI" : "Generate with AI"}
+                </button>
+              )}
+              {!editingAiSummary && !generatingClientSummary && aiSummaryText && (
+                <button
+                  onClick={() => {
+                    setEditingAiSummary(true);
+                  }}
+                  className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                >
+                  Edit
+                </button>
+              )}
+            </div>
           </div>
           <p className="text-xs text-gray-400 mb-3">
-            Auto-generated when client data changes. Last updated:{" "}
-            {new Date(selectedClient.updated_at).toLocaleDateString()}
+            {aiSummaryText ? "AI-generated summary." : "Click 'Generate with AI' to create a summary from client data."}{" "}
+            Last updated: {new Date(selectedClient.updated_at).toLocaleDateString()}
           </p>
-          {editingAiSummary ? (
+          {generatingClientSummary ? (
+            <div className="flex items-center gap-2 py-4">
+              <svg className="animate-spin h-5 w-5 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              <span className="text-sm text-purple-600">Generating AI summary...</span>
+            </div>
+          ) : editingAiSummary ? (
             <div>
               <textarea
                 value={aiSummaryText}
@@ -924,24 +972,49 @@ function Clients() {
                   Save
                 </button>
                 <button
-                  onClick={() => setEditingAiSummary(false)}
+                  onClick={() => {
+                    setAiSummaryText(selectedClient.ai_summary || "");
+                    setEditingAiSummary(false);
+                  }}
                   className="text-xs px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                 >
                   Cancel
                 </button>
               </div>
             </div>
-          ) : (
+          ) : aiSummaryText ? (
             <p className="text-sm text-gray-700 whitespace-pre-line">
-              {aiSummaryText ||
-                `${selectedClient.first_name} ${selectedClient.last_name} is an experienced property investor with a household income of $${(selectedClient.income || 0).toLocaleString()} and current portfolio of ${selectedClient.investment_addresses ? selectedClient.investment_addresses.split("\n").filter(Boolean).length : 0} investment properties. Total estimated assets are $${(selectedClient.assets || 0).toLocaleString()} against liabilities of $${(selectedClient.liabilities || 0).toLocaleString()}, with $${(selectedClient.available_deposit || 0).toLocaleString()} available as deposit for new acquisitions.\n\nCurrent strategy focuses on building a property portfolio in Sydney's Eastern Suburbs and North Shore. ${selectedClient.first_name} is well-organised and has a strong serviceability position, with rental income from existing properties supporting further borrowing capacity. Monthly expenses are $${(selectedClient.monthly_expenses || 0).toLocaleString()}.\n\nKey action items: Review rate competitiveness on existing loans, explore equity release for next acquisition, and continue monitoring properties in target suburbs.`}
+              {aiSummaryText}
             </p>
+          ) : (
+            <p className="text-sm text-gray-400 italic">
+              No AI summary yet. Click "Generate with AI" to create one from client data, meetings, and deals.
+            </p>
+          )}
+          {aiError && (
+            <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-xs text-red-600">{aiError}</p>
+              <button onClick={() => setAiError(null)} className="text-xs text-red-500 underline mt-1">Dismiss</button>
+            </div>
           )}
         </div>
 
         {/* Financial Details */}
         <div className="card">
-          <h3 className="text-lg font-semibold mb-1">Financial Details</h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-lg font-semibold">Financial Details</h3>
+            {!editingProfile && (
+              <button
+                onClick={() => {
+                  setEditingProfile(true);
+                  setEditForm({ ...selectedClient });
+                }}
+                className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+              >
+                Edit
+              </button>
+            )}
+          </div>
           <p className="text-sm text-gray-500 mb-4">
             Auto-populated from meeting transcriptions and email imports. You can also enter or edit
             these manually.
@@ -1056,6 +1129,80 @@ function Clients() {
               ) : (
                 <p className="mt-1">${selectedClient.monthly_expenses?.toLocaleString() || "-"}</p>
               )}
+            </div>
+          </div>
+          <div className="mt-6">
+            <h4 className="text-sm font-semibold text-gray-700 mb-3">Current Loan</h4>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-500">Lender</label>
+                {editingProfile ? (
+                  <input
+                    type="text"
+                    value={editForm.current_lender ?? ""}
+                    onChange={(e) => setEditForm({ ...editForm, current_lender: e.target.value })}
+                    className="input mt-1"
+                    placeholder="e.g. CommBank"
+                  />
+                ) : (
+                  <p className="mt-1">{selectedClient.current_lender || "-"}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-500">Loan Balance</label>
+                {editingProfile ? (
+                  <input
+                    type="number"
+                    value={editForm.current_loan_balance ?? ""}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        current_loan_balance: e.target.value ? Number(e.target.value) : undefined,
+                      })
+                    }
+                    className="input mt-1"
+                  />
+                ) : (
+                  <p className="mt-1">${selectedClient.current_loan_balance?.toLocaleString() || "-"}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-500">Interest Rate</label>
+                {editingProfile ? (
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editForm.current_interest_rate ?? ""}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        current_interest_rate: e.target.value ? Number(e.target.value) : undefined,
+                      })
+                    }
+                    className="input mt-1"
+                    placeholder="e.g. 5.99"
+                  />
+                ) : (
+                  <p className="mt-1">{selectedClient.current_interest_rate != null ? `${selectedClient.current_interest_rate}%` : "-"}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-500">Loan Type</label>
+                {editingProfile ? (
+                  <select
+                    value={editForm.current_loan_type ?? ""}
+                    onChange={(e) => setEditForm({ ...editForm, current_loan_type: e.target.value })}
+                    className="input mt-1"
+                  >
+                    <option value="">Select...</option>
+                    <option value="Variable">Variable</option>
+                    <option value="Fixed">Fixed</option>
+                    <option value="Split">Split</option>
+                  </select>
+                ) : (
+                  <p className="mt-1">{selectedClient.current_loan_type || "-"}</p>
+                )}
+              </div>
             </div>
           </div>
           <div className="mt-4">
@@ -1755,7 +1902,7 @@ function Clients() {
 
         {/* Meetings Section */}
         <div className="card">
-          <h3 className="text-lg font-semibold mb-4">Meetings ({clientMeetings.length})</h3>
+          <h3 className="text-lg font-semibold mb-4">Meetings & Emails ({clientMeetings.length})</h3>
           {clientMeetings.length === 0 ? (
             <p className="text-gray-500 text-sm">No meetings recorded yet for this client.</p>
           ) : (
@@ -1771,114 +1918,269 @@ function Clients() {
                       onClick={() => setExpandedMeetingId(isExpanded ? null : (meeting.id ?? null))}
                       className="w-full p-3 text-left hover:bg-gray-100 transition-colors"
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <svg
-                            className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 5l7 7-7 7"
-                            />
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <svg
+                          className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? "rotate-90" : ""}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M9 5l7 7-7 7"
+                          />
+                        </svg>
+                        <p className="text-sm font-medium text-gray-700">
+                          {formatMeetingDate(meeting.meeting_date)}
+                        </p>
+                        {meeting.meeting_type === "email" && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">Email</span>
+                        )}
+                      </div>
+                      <div className="ml-6 flex items-center gap-2">
+                        {meeting.meeting_type === "email" ? (
+                          <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                           </svg>
-                          <p className="font-medium text-sm">{meeting.title}</p>
-                        </div>
-                        <p className="text-xs text-gray-400">
-                          {new Date(meeting.meeting_date).toLocaleDateString()}
-                        </p>
+                        ) : (
+                          <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        )}
+                        <p className="font-medium text-sm">{meeting.title}</p>
+                        {meeting.meeting_type !== "email" && meeting.duration_seconds && (
+                          <span className="text-xs text-gray-500">
+                            ({formatDuration(meeting.duration_seconds)})
+                          </span>
+                        )}
                       </div>
-                      <div className="ml-6">
-                        <p className="text-xs text-gray-500">
-                          Duration: {formatDuration(meeting.duration_seconds)}
+                      {/* Collapsed email preview */}
+                      {!isExpanded && meeting.meeting_type === "email" && (meeting.summary || meeting.notes) && (
+                        <p className="ml-6 mt-1 text-xs text-gray-500 truncate">
+                          {(() => {
+                            const preview = meeting.summary || meeting.notes || "";
+                            const text = stripHtmlToText(preview);
+                            return text.slice(0, 120) + (text.length > 120 ? "..." : "");
+                          })()}
                         </p>
-                      </div>
+                      )}
                     </button>
 
-                    {/* AI Summary always visible (full text when collapsed) */}
-                    {meeting.summary && (
-                      <div className="px-3 pb-3 ml-9">
-                        <div className="bg-white border border-gray-200 rounded-lg p-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
-                                AI Summary
-                              </h4>
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 font-medium">
-                                Auto-generated
-                              </span>
+                    {isExpanded && (
+                      <div className="px-3 pb-3 ml-9 space-y-3">
+                        {/* AI Summary */}
+                        {meeting.summary && (
+                          <div className="bg-white border border-gray-200 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
+                                  AI Summary
+                                </h4>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 font-medium">
+                                  Auto-generated
+                                </span>
+                              </div>
+                              {!isEditingSummary && (
+                                <div className="flex items-center gap-2">
+                                  {meeting.transcript && meeting.meeting_type !== "email" && generatingMeetingSummaryId !== meeting.id && (
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        if (!meeting.id) return;
+                                        setGeneratingMeetingSummaryId(meeting.id);
+                                        try {
+                                          const summary = await invoke<string>("generate_meeting_summary", { meetingId: meeting.id });
+                                          setClientMeetings((prev) =>
+                                            prev.map((m) => m.id === meeting.id ? { ...m, summary } : m),
+                                          );
+                                        } catch (error) {
+                                          console.error("Failed to regenerate meeting summary:", error);
+                                          setAiError(String(error));
+                                        } finally {
+                                          setGeneratingMeetingSummaryId(null);
+                                        }
+                                      }}
+                                      className="text-xs text-purple-600 hover:text-purple-800 font-medium"
+                                    >
+                                      Regenerate
+                                    </button>
+                                  )}
+                                  {generatingMeetingSummaryId === meeting.id && (
+                                    <span className="text-xs text-purple-600 flex items-center gap-1">
+                                      <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                      </svg>
+                                      Regenerating...
+                                    </span>
+                                  )}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingSummaryId(meeting.id ?? null);
+                                      setEditedSummary(stripHtmlToText(meeting.summary || ""));
+                                    }}
+                                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                                  >
+                                    Edit
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {isExpanded && !isEditingSummary && (
+                            {isEditingSummary ? (
+                              <div>
+                                <textarea
+                                  value={editedSummary}
+                                  onChange={(e) => setEditedSummary(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                  rows={4}
+                                />
+                                <div className="flex gap-2 mt-2">
+                                  <button
+                                    onClick={() => {
+                                      setClientMeetings((prev) =>
+                                        prev.map((m) =>
+                                          m.id === meeting.id ? { ...m, summary: editedSummary } : m,
+                                        ),
+                                      );
+                                      setEditingSummaryId(null);
+                                    }}
+                                    className="text-xs px-3 py-1 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingSummaryId(null)}
+                                    className="text-xs px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripHtmlToText(meeting.summary)}</p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Email Content (plain text) */}
+                        {meeting.meeting_type === "email" && meeting.notes && (
+                          <div className="bg-white border border-gray-200 rounded-lg p-3">
+                            <h4 className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">
+                              Email Content
+                            </h4>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripHtmlToText(meeting.notes)}</p>
+                          </div>
+                        )}
+
+                        {!meeting.summary && (
+                          <div className="space-y-2">
+                            {generatingMeetingSummaryId === meeting.id ? (
+                              <div className="flex items-center gap-2 py-2">
+                                <svg className="animate-spin h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                </svg>
+                                <span className="text-sm text-purple-600">Generating AI summary...</span>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="text-sm text-gray-400 italic">No summary generated yet.</p>
+                                {meeting.transcript && meeting.meeting_type !== "email" && (
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      if (!meeting.id) return;
+                                      setGeneratingMeetingSummaryId(meeting.id);
+                                      try {
+                                        const summary = await invoke<string>("generate_meeting_summary", { meetingId: meeting.id });
+                                        setClientMeetings((prev) =>
+                                          prev.map((m) => m.id === meeting.id ? { ...m, summary } : m),
+                                        );
+                                      } catch (error) {
+                                        console.error("Failed to generate meeting summary:", error);
+                                        setAiError(String(error));
+                                      } finally {
+                                        setGeneratingMeetingSummaryId(null);
+                                      }
+                                    }}
+                                    className="text-xs px-3 py-1 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"
+                                  >
+                                    Generate with AI
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Broker Notes - editable for both meetings and emails */}
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                              Broker Notes
+                            </h4>
+                            {editingNotesId !== meeting.id && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setEditingSummaryId(meeting.id ?? null);
-                                  setEditedSummary(meeting.summary || "");
+                                  setEditingNotesId(meeting.id ?? null);
+                                  setEditedNotes(meeting.broker_notes || "");
                                 }}
                                 className="text-xs text-primary-600 hover:text-primary-800 font-medium"
                               >
-                                Edit
+                                {meeting.broker_notes ? "Edit" : "Add Note"}
                               </button>
                             )}
                           </div>
-                          {isEditingSummary ? (
+                          {editingNotesId === meeting.id ? (
                             <div>
                               <textarea
-                                value={editedSummary}
-                                onChange={(e) => setEditedSummary(e.target.value)}
+                                value={editedNotes}
+                                onChange={(e) => setEditedNotes(e.target.value)}
                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                                rows={4}
+                                rows={3}
+                                placeholder="Add notes for additional context..."
+                                autoFocus
                               />
                               <div className="flex gap-2 mt-2">
                                 <button
-                                  onClick={() => {
-                                    setClientMeetings((prev) =>
-                                      prev.map((m) =>
-                                        m.id === meeting.id ? { ...m, summary: editedSummary } : m,
-                                      ),
-                                    );
-                                    setEditingSummaryId(null);
+                                  onClick={async () => {
+                                    if (!meeting.id) return;
+                                    try {
+                                      await invoke("update_meeting_notes", { meetingId: meeting.id, notes: editedNotes });
+                                      setClientMeetings((prev) =>
+                                        prev.map((m) =>
+                                          m.id === meeting.id ? { ...m, broker_notes: editedNotes } : m,
+                                        ),
+                                      );
+                                    } catch (error) {
+                                      console.error("Failed to save notes:", error);
+                                    }
+                                    setEditingNotesId(null);
                                   }}
                                   className="text-xs px-3 py-1 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
                                 >
                                   Save
                                 </button>
                                 <button
-                                  onClick={() => setEditingSummaryId(null)}
+                                  onClick={() => setEditingNotesId(null)}
                                   className="text-xs px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
                                 >
                                   Cancel
                                 </button>
                               </div>
                             </div>
+                          ) : meeting.broker_notes ? (
+                            <p className="text-sm text-gray-600 italic">{meeting.broker_notes}</p>
                           ) : (
-                            <p className="text-sm text-gray-700">{meeting.summary}</p>
+                            <p className="text-sm text-gray-400 italic">No notes added.</p>
                           )}
                         </div>
-                      </div>
-                    )}
 
-                    {isExpanded && (
-                      <div className="px-3 pb-3 ml-9 space-y-3">
-                        {!meeting.summary && (
-                          <p className="text-sm text-gray-400 italic">No summary generated yet.</p>
-                        )}
-
-                        {/* Broker Notes */}
-                        {meeting.notes && (
-                          <div>
-                            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                              Broker Notes
-                            </h4>
-                            <p className="text-sm text-gray-600 italic">{meeting.notes}</p>
-                          </div>
-                        )}
-
-                        {/* Full Transcript - collapsed by default */}
+                        {/* Full Transcript - collapsed by default, only if exists */}
                         {meeting.transcript && (
                           <div>
                             <button
@@ -1914,14 +2216,6 @@ function Clients() {
                             )}
                           </div>
                         )}
-                        {!meeting.transcript && (
-                          <div className="bg-gray-100 border border-dashed border-gray-300 rounded-lg p-4 text-center">
-                            <p className="text-sm text-gray-400">
-                              Transcript will appear here once the meeting is recorded and
-                              processed.
-                            </p>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -1931,146 +2225,9 @@ function Clients() {
           )}
         </div>
 
-        {/* Document Categories */}
+        {/* Documents */}
         <div className="card">
           <h3 className="text-lg font-semibold mb-4">Documents</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 mx-auto bg-green-100 rounded-lg flex items-center justify-center mb-2">
-                <svg
-                  className="w-5 h-5 text-green-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
-                  />
-                </svg>
-              </div>
-              <h4 className="font-medium text-sm">Bank Statements</h4>
-              <p className="text-sm text-gray-500">{getDocCountByType("bank_statement")} files</p>
-            </div>
-
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 mx-auto bg-blue-100 rounded-lg flex items-center justify-center mb-2">
-                <svg
-                  className="w-5 h-5 text-blue-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-              </div>
-              <h4 className="font-medium text-sm">PAYG Statements</h4>
-              <p className="text-sm text-gray-500">{getDocCountByType("payg_statement")} files</p>
-            </div>
-
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 mx-auto bg-purple-100 rounded-lg flex items-center justify-center mb-2">
-                <svg
-                  className="w-5 h-5 text-purple-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"
-                  />
-                </svg>
-              </div>
-              <h4 className="font-medium text-sm">Tax Statements</h4>
-              <p className="text-sm text-gray-500">{getDocCountByType("tax_statement")} files</p>
-            </div>
-
-            <div className="text-center p-4 bg-gray-50 rounded-lg">
-              <div className="w-10 h-10 mx-auto bg-orange-100 rounded-lg flex items-center justify-center mb-2">
-                <svg
-                  className="w-5 h-5 text-orange-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-              </div>
-              <h4 className="font-medium text-sm">Contracts</h4>
-              <p className="text-sm text-gray-500">{getDocCountByType("contract")} files</p>
-            </div>
-          </div>
-
-          {/* Upload Area */}
-          <div
-            className={`border-2 border-dashed rounded-lg p-6 text-center mb-6 transition-colors ${
-              dragOver ? "border-primary-400 bg-primary-50" : "border-gray-300"
-            }`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleFileDrop}
-          >
-            <svg
-              className="w-10 h-10 mx-auto text-gray-400 mb-3"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-              />
-            </svg>
-            <p className="text-gray-600 mb-3">
-              {dragOver ? "Drop file here" : "Drag & drop or browse to upload"}
-            </p>
-            <div className="flex items-center justify-center gap-3">
-              <select
-                value={uploadDocType}
-                onChange={(e) => setUploadDocType(e.target.value)}
-                className="input w-auto"
-              >
-                <option value="bank_statement">Bank Statement</option>
-                <option value="payg_statement">PAYG Statement</option>
-                <option value="tax_statement">Tax Statement</option>
-                <option value="contract">Contract</option>
-                <option value="other">Other</option>
-              </select>
-              <button className="btn-primary" onClick={() => fileInputRef.current?.click()}>
-                Browse Files
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 mt-3">
-              Supported: PDF, JPG, PNG (max 10MB per file)
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-          </div>
 
           {/* Document List */}
           {clientDocuments.length === 0 ? (
@@ -2175,6 +2332,15 @@ function Clients() {
                         <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700 capitalize">
                           {doc.document_type.replace("_", " ")}
                         </span>
+                        {doc.source === "client" ? (
+                          <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                            Sent by client
+                          </span>
+                        ) : (
+                          <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-gray-50 text-gray-500">
+                            From team
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 text-sm text-gray-500">
                         {new Date(doc.uploaded_at).toLocaleDateString()}
@@ -2219,6 +2385,49 @@ function Clients() {
               </table>
             </div>
           )}
+
+          {/* Upload Area */}
+          <div
+            className={`border-2 border-dashed rounded-lg p-6 text-center mt-4 transition-colors ${
+              dragOver ? "border-primary-400 bg-primary-50" : "border-gray-300"
+            }`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleFileDrop}
+          >
+            <svg
+              className="w-10 h-10 mx-auto text-gray-400 mb-3"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+              />
+            </svg>
+            <p className="text-gray-600 mb-3">
+              {dragOver ? "Drop file here" : "Drag & drop or browse to upload"}
+            </p>
+            <button className="btn-primary" onClick={() => fileInputRef.current?.click()}>
+              Browse Files
+            </button>
+            <p className="text-xs text-gray-400 mt-3">
+              Supported: PDF, JPG, PNG (max 10MB per file)
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </div>
         </div>
       </div>
     );

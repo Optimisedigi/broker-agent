@@ -9,7 +9,7 @@ pub fn save_meeting(state: State<AppState>, meeting: Meeting) -> Result<i64, Str
     // First, check if client exists by email
     let client_id: Option<i64> = conn
         .query_row(
-            "SELECT id FROM clients WHERE email = ?1",
+            "SELECT id FROM clients WHERE LOWER(email) = LOWER(?1)",
             [&meeting.client_email],
             |row| row.get(0),
         )
@@ -76,7 +76,7 @@ pub fn save_meeting(state: State<AppState>, meeting: Meeting) -> Result<i64, Str
 pub fn get_meetings(state: State<AppState>) -> Result<Vec<Meeting>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT m.id, m.client_id, c.first_name || ' ' || c.last_name as client_name, c.email, m.title, m.recording_path, m.transcript, m.summary, m.meeting_date, m.duration_seconds, m.notes
+        .prepare("SELECT m.id, m.client_id, c.first_name || ' ' || c.last_name as client_name, c.email, m.title, m.recording_path, m.transcript, m.summary, m.meeting_date, m.duration_seconds, m.notes, m.meeting_type, m.external_id, m.broker_notes
                  FROM meetings m
                  JOIN clients c ON m.client_id = c.id
                  ORDER BY m.meeting_date DESC")
@@ -96,6 +96,9 @@ pub fn get_meetings(state: State<AppState>) -> Result<Vec<Meeting>, String> {
                 meeting_date: row.get(8)?,
                 duration_seconds: row.get(9)?,
                 notes: row.get(10)?,
+                meeting_type: row.get(11)?,
+                external_id: row.get(12)?,
+                broker_notes: row.get(13)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -109,7 +112,7 @@ pub fn get_meetings(state: State<AppState>) -> Result<Vec<Meeting>, String> {
 pub fn get_client_meetings(state: State<AppState>, client_id: i64) -> Result<Vec<Meeting>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT m.id, m.client_id, c.first_name || ' ' || c.last_name as client_name, c.email, m.title, m.recording_path, m.transcript, m.summary, m.meeting_date, m.duration_seconds, m.notes
+        .prepare("SELECT m.id, m.client_id, c.first_name || ' ' || c.last_name as client_name, c.email, m.title, m.recording_path, m.transcript, m.summary, m.meeting_date, m.duration_seconds, m.notes, m.meeting_type, m.external_id, m.broker_notes
                  FROM meetings m
                  JOIN clients c ON m.client_id = c.id
                  WHERE m.client_id = ?1
@@ -130,6 +133,9 @@ pub fn get_client_meetings(state: State<AppState>, client_id: i64) -> Result<Vec
                 meeting_date: row.get(8)?,
                 duration_seconds: row.get(9)?,
                 notes: row.get(10)?,
+                meeting_type: row.get(11)?,
+                external_id: row.get(12)?,
+                broker_notes: row.get(13)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -137,4 +143,15 @@ pub fn get_client_meetings(state: State<AppState>, client_id: i64) -> Result<Vec
         .map_err(|e| e.to_string())?;
 
     Ok(meetings)
+}
+
+#[tauri::command]
+pub fn update_meeting_notes(state: State<AppState>, meeting_id: i64, notes: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE meetings SET broker_notes = ?1 WHERE id = ?2",
+        rusqlite::params![notes, meeting_id],
+    )
+    .map_err(|e| format!("Failed to update meeting notes: {}", e))?;
+    Ok(())
 }

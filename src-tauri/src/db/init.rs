@@ -129,6 +129,24 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
     let _ = conn.execute("ALTER TABLE clients ADD COLUMN referral_source TEXT DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE clients ADD COLUMN pipeline_stage TEXT DEFAULT 'lead_received'", []);
 
+    // Migration: add source to documents (team vs client)
+    let _ = conn.execute("ALTER TABLE documents ADD COLUMN source TEXT DEFAULT 'team'", []);
+
+    // Migration: add meeting_type and external_id to meetings
+    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN meeting_type TEXT DEFAULT 'meeting'", []);
+    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN external_id TEXT", []);
+    let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_external_id ON meetings(external_id) WHERE external_id IS NOT NULL", []);
+    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN broker_notes TEXT DEFAULT ''", []);
+
+    // Migration: add current loan fields to clients
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN current_lender TEXT DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN current_loan_balance REAL", []);
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN current_interest_rate REAL", []);
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN current_loan_type TEXT DEFAULT ''", []);
+
+    // Migration: add AI summary to clients
+    let _ = conn.execute("ALTER TABLE clients ADD COLUMN ai_summary TEXT", []);
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS proposals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,8 +220,8 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
     if client_count == 0 {
         // Insert dummy client: Sarah Mitchell
         conn.execute(
-            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             [
                 "Sarah", "Mitchell",
                 "sarah.mitchell@email.com", "0412 345 678",
@@ -217,6 +235,7 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
                 "existing",
                 "Referral",
                 "post_settlement_review",
+                "ANZ", "720000", "5.99", "Variable",
                 "2022-03-15T10:00:00+11:00",
                 "2026-02-20T14:30:00+11:00",
             ],

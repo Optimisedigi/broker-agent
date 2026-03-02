@@ -35,6 +35,11 @@ pub struct Client {
     pub client_status: String,
     pub referral_source: Option<String>,
     pub pipeline_stage: Option<String>,
+    pub current_lender: Option<String>,
+    pub current_loan_balance: Option<f64>,
+    pub current_interest_rate: Option<f64>,
+    pub current_loan_type: Option<String>,
+    pub ai_summary: Option<String>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -67,6 +72,7 @@ pub struct Document {
     pub document_type: String,
     pub file_path: String,
     pub file_data: Option<String>,
+    pub source: Option<String>,
     pub uploaded_at: String,
 }
 
@@ -83,6 +89,9 @@ pub struct Meeting {
     pub meeting_date: String,
     pub duration_seconds: Option<i64>,
     pub notes: Option<String>,
+    pub meeting_type: Option<String>,
+    pub external_id: Option<String>,
+    pub broker_notes: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -25,6 +25,8 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
   const [introEmail, setIntroEmail] = useState("");
   const [proposalEmail, setProposalEmail] = useState("");
   const [followUpEmail, setFollowUpEmail] = useState("");
+  const [approvalEmail, setApprovalEmail] = useState("");
+  const [settlementEmail, setSettlementEmail] = useState("");
   const [templatesSaved, setTemplatesSaved] = useState(false);
 
   // Mic & screen test
@@ -202,12 +204,22 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
       localStorage.getItem("tpl_followup") ||
         `Hi {{client_name}},\n\nJust checking in to see how things are going with the property at {{property_address}}.\n\nIf you have any questions about the proposal or would like to discuss next steps, I'm happy to jump on a quick call.\n\nBest regards,\n{{broker_name}}`,
     );
+    setApprovalEmail(
+      localStorage.getItem("tpl_approval") ||
+        `Hi {{client_name}},\n\nGreat news! Your loan has been formally approved. Here are the details:\n\n- Property: {{property_address}}\n- Loan amount: {{loan_amount}}\n- Lender: {{lender_name}}\n- Interest rate: {{interest_rate}}\n\nThe next step is loan signing, and I will be in touch shortly to coordinate the paperwork. If you have any questions in the meantime, please don't hesitate to reach out.\n\nCongratulations on reaching this milestone!\n\nBest regards,\n{{broker_name}}`,
+    );
+    setSettlementEmail(
+      localStorage.getItem("tpl_settlement") ||
+        `Hi {{client_name}},\n\nCongratulations on settling on your new property at {{property_address}}! This is a huge milestone and you should be very proud.\n\nHere is a summary of your loan:\n- Loan amount: {{loan_amount}}\n- Lender: {{lender_name}}\n- Interest rate: {{interest_rate}}\n\nI will check in with you in a few months to make sure everything is running smoothly and to review whether there are better options available as the market changes.\n\nWishing you all the best in your new home. It has been a pleasure working with you.\n\nWarm regards,\n{{broker_name}}`,
+    );
   };
 
   const handleSaveTemplates = () => {
     localStorage.setItem("tpl_intro", introEmail);
     localStorage.setItem("tpl_proposal", proposalEmail);
     localStorage.setItem("tpl_followup", followUpEmail);
+    localStorage.setItem("tpl_approval", approvalEmail);
+    localStorage.setItem("tpl_settlement", settlementEmail);
     setTemplatesSaved(true);
     setTimeout(() => setTemplatesSaved(false), 2000);
   };
@@ -721,6 +733,24 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
       {/* Email Templates */}
       <div className="card">
         <h3 className="text-lg font-semibold mb-2">Email Templates</h3>
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
+          <div className="flex items-start gap-2">
+            <span className="text-orange-500 mt-0.5 flex-shrink-0">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </span>
+            <div>
+              <p className="text-sm font-medium text-orange-800">Coming Soon: Pipeline Stage Triggers</p>
+              <p className="text-xs text-orange-700 mt-1">
+                These templates will be automatically triggered when a client moves through pipeline stages. For example, when you move a client to "Discovery Call", the introduction email is created as a draft. When formal approval comes through, the approval congratulations email is drafted and ready to send.
+              </p>
+              <p className="text-xs text-orange-700 mt-1">
+                Nothing sends automatically. All emails are pushed to your Gmail or Outlook drafts for you to review, personalise, and send when ready. Below is an example of the templates that can be configured for each stage.
+              </p>
+            </div>
+          </div>
+        </div>
         <p className="text-sm text-gray-500 mb-4">
           Customise your email templates. Use placeholders like{" "}
           <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{"{{broker_name}}"}</code>,{" "}
@@ -734,7 +764,10 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Introduction Email
             </label>
-            <p className="text-xs text-gray-400 mb-1">Sent when first contacting a new client</p>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Trigger: Lead Received / Discovery Call</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-1">Drafted when first contacting a new client</p>
             <textarea
               value={introEmail}
               onChange={(e) => setIntroEmail(e.target.value)}
@@ -747,8 +780,11 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Post-Meeting Proposal Email
             </label>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Trigger: Client Recommendation</span>
+            </div>
             <p className="text-xs text-gray-400 mb-1">
-              Sent after a meeting with loan proposal details
+              Drafted after a meeting with loan proposal details
             </p>
             <textarea
               value={proposalEmail}
@@ -760,12 +796,43 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Follow-Up Email</label>
-            <p className="text-xs text-gray-400 mb-1">Sent to check in after sending a proposal</p>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Trigger: Documents Collected / Application Submitted</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-1">Drafted to check in after sending a proposal</p>
             <textarea
               value={followUpEmail}
               onChange={(e) => setFollowUpEmail(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm font-mono"
               rows={6}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Loan Approval Congratulations</label>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Trigger: Formal Approval</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-1">Drafted when the client's loan is formally approved</p>
+            <textarea
+              value={approvalEmail}
+              onChange={(e) => setApprovalEmail(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm font-mono"
+              rows={8}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Settlement Congratulations</label>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Trigger: Settlement</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-1">Drafted when the client settles on their property</p>
+            <textarea
+              value={settlementEmail}
+              onChange={(e) => setSettlementEmail(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm font-mono"
+              rows={8}
             />
           </div>
         </div>
