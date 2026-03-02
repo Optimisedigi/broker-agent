@@ -357,8 +357,12 @@ pub async fn start_oauth(
         .append_pair("scope", scopes)
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256")
-        .append_pair("access_type", "offline")
         .append_pair("prompt", "consent");
+
+    if provider == "google" {
+        auth_url.query_pairs_mut()
+            .append_pair("access_type", "offline");
+    }
 
     // Open browser
     eprintln!("[OAuth] Opening browser for {} auth", provider);
@@ -396,6 +400,10 @@ pub async fn start_oauth(
 
     let resp_text = resp.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
     eprintln!("[OAuth] Token response: {}", &resp_text[..resp_text.len().min(500)]);
+
+    if resp_text.contains("\"error\"") {
+        return Err(format!("OAuth token error: {}", resp_text));
+    }
 
     let token_resp: TokenResponse = serde_json::from_str(&resp_text)
         .map_err(|e| format!("Failed to parse token response: {}", e))?;
