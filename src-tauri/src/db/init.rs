@@ -212,6 +212,18 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS app_license (
+            id INTEGER PRIMARY KEY,
+            license_key TEXT,
+            email TEXT,
+            expires_at TEXT,
+            trial_started_at TEXT NOT NULL,
+            activated_at TEXT
+        )",
+        [],
+    )?;
+
     // Seed dummy data if no clients exist
     let client_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0))

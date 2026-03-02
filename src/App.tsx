@@ -1,13 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { useEffect, useRef, useState } from "react";
 import BankPolicies from "./components/BankPolicies";
 import Clients from "./components/Clients";
 import Dashboard from "./components/Dashboard";
+import IndustryNews from "./components/IndustryNews";
+import LicenseGate from "./components/LicenseGate";
 import Meetings from "./components/Meetings";
 import Settings from "./components/Settings";
 import Team from "./components/Team";
 
-type View = "dashboard" | "team" | "clients" | "policies" | "meetings" | "settings";
+type View = "dashboard" | "team" | "clients" | "policies" | "meetings" | "settings" | "news";
 
 function App() {
   const [currentView, setCurrentView] = useState<View>("dashboard");
@@ -17,6 +21,10 @@ function App() {
   const [profile, setProfile] = useState<{ name: string; photo: string | null } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<{ version: string; body: string } | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [licenseState, setLicenseState] = useState<string>("loading");
+  const [trialDays, setTrialDays] = useState<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(() => {
     const saved = localStorage.getItem("content_zoom");
@@ -39,12 +47,49 @@ function App() {
     });
   };
 
+  const checkLicense = async () => {
+    try {
+      const status: any = await invoke("get_license_status");
+      setLicenseState(status.state);
+      setTrialDays(status.days_remaining);
+    } catch {
+      setLicenseState("trial");
+    }
+  };
+
   useEffect(() => {
+    checkLicense();
     loadDashboardStats();
     loadProfile();
+    checkForUpdates();
     const saved = localStorage.getItem("broker_logo");
     if (saved) setLogo(saved);
   }, []);
+
+  const checkForUpdates = async () => {
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateAvailable({ version: update.version, body: update.body || "" });
+      }
+    } catch {
+      // No update available or not in production build
+    }
+  };
+
+  const handleUpdate = async () => {
+    setUpdating(true);
+    try {
+      const update = await check();
+      if (update) {
+        await update.downloadAndInstall();
+        await relaunch();
+      }
+    } catch (err) {
+      console.error("Update failed:", err);
+      setUpdating(false);
+    }
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -56,17 +101,26 @@ function App() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      let result = "";
+      let totalEmails = 0;
+      let totalDocs = 0;
       for (const provider of ["google", "microsoft"]) {
         try {
           const status: any = await invoke("check_oauth_status", { provider });
           if (status.connected) {
             const r: any = await invoke("sync_emails", { provider });
-            result = `Imported ${r.imported_count} document${r.imported_count !== 1 ? "s" : ""}`;
+            totalEmails += r.email_count || 0;
+            totalDocs += r.document_count || 0;
           }
         } catch (_) {}
       }
-      setSyncResult(result || "Sync complete");
+      if (totalEmails > 0 || totalDocs > 0) {
+        const parts = [];
+        if (totalEmails > 0) parts.push(`${totalEmails} email${totalEmails !== 1 ? "s" : ""}`);
+        if (totalDocs > 0) parts.push(`${totalDocs} document${totalDocs !== 1 ? "s" : ""}`);
+        setSyncResult(`Synced ${parts.join(", ")}`);
+      } else {
+        setSyncResult("Sync complete, no new items");
+      }
     } catch (err: any) {
       setSyncResult(`Sync failed: ${err}`);
     } finally {
@@ -105,6 +159,8 @@ function App() {
         return <Clients />;
       case "policies":
         return <BankPolicies />;
+      case "news":
+        return <IndustryNews />;
       case "meetings":
         return <Meetings />;
       case "settings":
@@ -113,6 +169,14 @@ function App() {
         return <Dashboard stats={stats} />;
     }
   };
+
+  if (licenseState === "loading") {
+    return <div className="flex items-center justify-center h-screen bg-gray-100"><div className="text-gray-400">Loading...</div></div>;
+  }
+
+  if (licenseState === "expired_trial" || licenseState === "expired_license") {
+    return <LicenseGate onActivated={checkLicense} />;
+  }
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -188,6 +252,18 @@ function App() {
                 Bank Policies
               </button>
             </li>
+            <li>
+              <button
+                onClick={() => setCurrentView("news")}
+                className={`w-full text-left px-4 py-2 rounded-lg transition-colors ${
+                  currentView === "news"
+                    ? "bg-primary-100 text-primary-700"
+                    : "hover:bg-gray-100"
+                }`}
+              >
+                Industry News
+              </button>
+            </li>
           </ul>
         </nav>
 
@@ -240,15 +316,9 @@ function App() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto relative" ref={scrollRef}>
-        <div
-          style={{
-            transform: `scale(${zoom / 100})`,
-            transformOrigin: "top left",
-            width: `${10000 / zoom}%`,
-          }}
-        >
-          <header className="bg-white shadow-sm px-8 py-4">
+      <div className="flex-1 overflow-hidden relative flex flex-col">
+        <header className="bg-white shadow-sm px-8 py-4 flex-shrink-0 z-10">
+          <div style={{ transform: `scale(${zoom / 100})`, transformOrigin: "top left", width: `${10000 / zoom}%` }}>
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-semibold">
                 {
@@ -257,12 +327,18 @@ function App() {
                     team: "Team Dashboard",
                     clients: "Clients",
                     policies: "Bank Policies",
+                    news: "Industry News",
                     meetings: "Meetings & Recording",
                     settings: "Settings",
                   }[currentView]
                 }
               </h2>
               <div className="flex items-center gap-3">
+                {licenseState === "trial" && (
+                  <div className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-3 py-1">
+                    Trial: {trialDays} day{trialDays !== 1 ? "s" : ""} remaining
+                  </div>
+                )}
                 <div className="text-sm text-gray-500">
                   {new Date().toLocaleDateString("en-AU", {
                     weekday: "long",
@@ -318,8 +394,32 @@ function App() {
                 </button>
               </div>
             </div>
-          </header>
-          <main className="p-8">{renderView()}</main>
+          </div>
+        </header>
+        {updateAvailable && (
+          <div className="bg-primary-50 border-b border-primary-200 px-8 py-2 flex items-center justify-between flex-shrink-0">
+            <span className="text-sm text-primary-700">
+              A new version ({updateAvailable.version}) is available.
+            </span>
+            <button
+              onClick={handleUpdate}
+              disabled={updating}
+              className="text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 px-3 py-1 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {updating ? "Updating..." : "Update & Restart"}
+            </button>
+          </div>
+        )}
+        <div className="flex-1 overflow-auto" ref={scrollRef}>
+          <div
+            style={{
+              transform: `scale(${zoom / 100})`,
+              transformOrigin: "top left",
+              width: `${10000 / zoom}%`,
+            }}
+          >
+            <main className="p-8">{renderView()}</main>
+          </div>
         </div>
 
         {/* Zoom Controls */}

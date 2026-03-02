@@ -7,4 +7,5 @@ pub mod documents;
 pub mod emails;
 pub mod meetings;
 pub mod policies;
+pub mod license;
 pub mod recording;
