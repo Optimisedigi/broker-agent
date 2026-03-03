@@ -125,32 +125,36 @@ function Team({ profile }: TeamProps) {
           onChange={(e) => setSelectedMonth(e.target.value)}
           className="text-xs border border-gray-200 rounded px-1.5 py-0.5 text-gray-500"
         >
-          <option value="last_month">Last month</option>
           <option value="this_month">This month</option>
+          <option value="last_month">Last month</option>
           <option value="last_3_months">Last 3 months</option>
+          <option value="last_6_months">Last 6 months</option>
+          <option value="last_12_months">Last 12 months</option>
+          <option value="last_18_months">Last 18 months</option>
+          <option value="last_24_months">Last 24 months</option>
         </select>
       </div>
 
       {/* Team Stats */}
       <div className="grid grid-cols-4 gap-4">
-        <div className="card">
+        <div className="card overflow-visible">
           <p className="text-sm text-gray-500">Team Size</p>
-          <p className="text-2xl font-bold text-gray-900">{brokers.length}</p>
+          <p className="text-2xl font-bold text-gray-900 leading-normal mt-1">{brokers.length}</p>
           <p className="text-xs text-gray-400 mt-1">Active brokers</p>
         </div>
-        <div className="card">
+        <div className="card overflow-visible">
           <p className="text-sm text-gray-500">Current Clients Speaking To</p>
-          <p className="text-2xl font-bold text-gray-900">14</p>
+          <p className="text-2xl font-bold text-gray-900 leading-normal mt-1">14</p>
           <p className="text-xs text-gray-400 mt-1">Active conversations</p>
         </div>
-        <div className="card">
+        <div className="card overflow-visible">
           <p className="text-sm text-gray-500">Team Pipeline Value</p>
-          <p className="text-2xl font-bold text-gray-900">{formatCurrency(totalPipeline)}</p>
+          <p className="text-2xl font-bold text-gray-900 leading-normal mt-1">{formatCurrency(totalPipeline)}</p>
           <p className="text-xs text-green-600 mt-1">+8% vs last month</p>
         </div>
-        <div className="card">
+        <div className="card overflow-visible">
           <p className="text-sm text-gray-500">Avg Conversion Rate</p>
-          <p className="text-2xl font-bold text-gray-900">{avgConversion}%</p>
+          <p className="text-2xl font-bold text-gray-900 leading-normal mt-1">{avgConversion}%</p>
           <p className="text-xs text-gray-400 mt-1">Team average</p>
         </div>
       </div>

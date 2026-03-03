@@ -44,6 +44,8 @@ pub struct Client {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub deal_count: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

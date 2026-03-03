@@ -100,10 +100,15 @@ pub async fn generate_meeting_summary(
         transcript
     };
 
-    let system_prompt = "You are an AI assistant for a mortgage broker. Write a short summary (3-5 lines max) of this meeting transcript so the broker can skip reading the full transcript. \
-        Extract only what matters: key financial figures (loan amounts, rates, deposit, property values), \
-        what was agreed or decided, and any action items. \
-        Be direct and specific. No filler, no headings, no bullet points. Use plain text, not markdown.";
+    let system_prompt = "You are an AI assistant for a mortgage broker. Summarize this meeting transcript in two parts.\n\n\
+        PART 1 - TLDR: Write a 2-3 line plain text summary starting with \"TLDR: \". Extract the most important facts: key financial figures (loan amounts, rates, deposit, property values), what was decided, and immediate next steps. No headings, no bullet points, just plain text.\n\n\
+        Then on a new line write exactly: ---DETAILED---\n\n\
+        PART 2 - DETAILED SUMMARY: Write a structured summary using these sections with **Section Name** markers:\n\n\
+        **Meeting Purpose**\nOne sentence describing why the meeting was held.\n\n\
+        **Key Takeaways**\n- Bullet points of the most important facts and decisions\n\n\
+        **Topics**\nGroup discussion points under sub-headings. Use plain text sub-headings followed by bullet points with details.\n\n\
+        **Next Steps**\n- Action items with who is responsible and any deadlines mentioned\n\n\
+        Be direct and specific. Use dollar amounts, percentages, lender names, and dates where available. Do not add filler or generic statements.";
 
     let summary = call_moonshot(system_prompt, &transcript).await?;
 

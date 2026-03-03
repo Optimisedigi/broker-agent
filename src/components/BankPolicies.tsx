@@ -336,9 +336,9 @@ function BankPolicies() {
         </div>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h4 className="font-semibold text-blue-800 mb-2">Coming Soon</h4>
-        <ul className="text-sm text-blue-700 space-y-1">
+      <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+        <h4 className="font-semibold text-white mb-2">Will be built on the production site</h4>
+        <ul className="text-sm text-gray-300 space-y-1">
           <li>• Automatic policy fetching from bank websites</li>
           <li>• Smart client-to-bank matching</li>
           <li>• Rate change alerts and notifications</li>

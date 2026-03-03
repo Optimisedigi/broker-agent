@@ -152,7 +152,7 @@ function App() {
   const renderView = () => {
     switch (currentView) {
       case "dashboard":
-        return <Dashboard stats={stats} onNavigate={setCurrentView} />;
+        return <Dashboard stats={stats} onNavigate={setCurrentView} onSync={handleSync} syncing={syncing} syncResult={syncResult} />;
       case "team":
         return <Team profile={profile} />;
       case "clients":
@@ -289,12 +289,13 @@ function App() {
             </svg>
           </button>
           {howItWorksOpen && (
-            <ol className="mt-2 ml-4 mr-2 mb-2 space-y-2 text-xs text-gray-500 list-decimal list-outside pl-3">
+            <ol className="mt-2 ml-4 mr-2 mb-2 space-y-1.5 text-[11px] text-gray-500 list-decimal list-outside pl-3 leading-snug">
+              <li>Connect your email (Gmail or Outlook) in Settings</li>
               <li>Add a new client (name + email)</li>
               <li>Schedule & record a meeting</li>
               <li>Meeting auto-transcribes & summarises</li>
-              <li>Documents auto-import from client emails</li>
               <li>Match client to bank policies</li>
+              <li>Press Sync to pull in emails & documents from clients</li>
               <li>Generate & send proposal</li>
             </ol>
           )}
@@ -335,7 +336,7 @@ function App() {
               </h2>
               <div className="flex items-center gap-3">
                 {licenseState === "trial" && (
-                  <div className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-3 py-1">
+                  <div className="text-xs font-medium text-gray-600 bg-gray-100 border border-gray-300 rounded-full px-3 py-1">
                     Trial: {trialDays} day{trialDays !== 1 ? "s" : ""} remaining
                   </div>
                 )}

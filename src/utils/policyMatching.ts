@@ -26,6 +26,7 @@ export interface Client {
   ai_summary?: string;
   created_at: string;
   updated_at: string;
+  deal_count?: number;
 }
 
 export interface BankPolicy {

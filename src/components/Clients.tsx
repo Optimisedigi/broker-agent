@@ -27,6 +27,52 @@ function stripEmailSignOff(text: string): string {
   return result.trim();
 }
 
+function parseSummary(raw: string): { tldr: string; detailed: string | null } {
+  const delimiter = "---DETAILED---";
+  const idx = raw.indexOf(delimiter);
+  if (idx === -1) {
+    return { tldr: raw, detailed: null };
+  }
+  const tldr = raw.substring(0, idx).trim().replace(/^TLDR:\s*/i, "");
+  const detailed = raw.substring(idx + delimiter.length).trim();
+  return { tldr, detailed };
+}
+
+function StructuredSummary({ content }: { content: string }) {
+  const lines = content.split("\n");
+  const elements: React.ReactNode[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const sectionMatch = line.match(/^\*\*(.+?)\*\*\s*$/);
+    if (sectionMatch) {
+      elements.push(
+        <h5 key={i} className="text-xs font-bold text-purple-700 uppercase tracking-wide mt-3 mb-1 first:mt-0">
+          {sectionMatch[1]}
+        </h5>
+      );
+    } else if (line.match(/^\s{2,}-\s/)) {
+      elements.push(
+        <p key={i} className="text-sm text-gray-700 ml-6 before:content-['–'] before:mr-1.5 before:text-gray-400">
+          {line.replace(/^\s+-\s/, "")}
+        </p>
+      );
+    } else if (line.match(/^-\s/)) {
+      elements.push(
+        <p key={i} className="text-sm text-gray-700 ml-3 before:content-['•'] before:mr-1.5 before:text-purple-400">
+          {line.replace(/^-\s/, "")}
+        </p>
+      );
+    } else if (line.trim() !== "") {
+      elements.push(
+        <p key={i} className="text-sm text-gray-700">{line}</p>
+      );
+    }
+  }
+
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
 interface Document {
   id?: number;
   client_id: number;
@@ -149,6 +195,7 @@ function Clients() {
     pipeline_stage: "lead_received",
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const clientDetailRef = useRef<HTMLDivElement>(null);
   const [uploadDocType] = useState("other");
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
   const [editingSummaryId, setEditingSummaryId] = useState<number | null>(null);
@@ -184,6 +231,7 @@ function Clients() {
   const [transcriptExpanded, setTranscriptExpanded] = useState<number | null>(null);
   const [editingNotesId, setEditingNotesId] = useState<number | null>(null);
   const [editedNotes, setEditedNotes] = useState("");
+  const [dictatingNotesId, setDictatingNotesId] = useState<number | null>(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [editForm, setEditForm] = useState<Partial<Client>>({});
   const [renamingDocId, setRenamingDocId] = useState<number | null>(null);
@@ -255,11 +303,19 @@ function Clients() {
   const handleSelectClient = (client: Client) => {
     setSelectedClient(client);
     setAiSummaryText(client.ai_summary || "");
+    setExpandedMeetingId(null);
+    setEditingSummaryId(null);
+    setEditingNotesId(null);
     if (client.id) {
       loadClientDocuments(client.id);
       loadClientMeetings(client.id);
       loadClientDeals(client.id);
     }
+    // Scroll to top after render
+    setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      clientDetailRef.current?.scrollTo({ top: 0, behavior: "instant" });
+    }, 0);
   };
 
   const handleBack = () => {
@@ -513,7 +569,7 @@ function Clients() {
       !selectedClient.monthly_expenses;
 
     return (
-      <div className="space-y-6">
+      <div ref={clientDetailRef} className="space-y-6">
         {renderDocumentPreview()}
 
         <div className="flex items-center gap-4">
@@ -621,18 +677,6 @@ function Clients() {
                 >
                   Cancel
                 </button>
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => {
-                    setEditingProfile(true);
-                    setEditForm({ ...selectedClient });
-                  }}
-                  className="text-sm px-3 py-1.5 rounded bg-primary-50 text-primary-600 hover:bg-primary-100 border border-primary-200"
-                >
-                  Edit Profile
-                </button>
                 <button
                   onClick={() => {
                     setShowDeleteConfirm(true);
@@ -643,6 +687,16 @@ function Clients() {
                   Delete Client
                 </button>
               </>
+            ) : (
+              <button
+                onClick={() => {
+                  setEditingProfile(true);
+                  setEditForm({ ...selectedClient });
+                }}
+                className="text-sm px-3 py-1.5 rounded bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300"
+              >
+                Edit Profile
+              </button>
             )}
           </div>
         </div>
@@ -724,7 +778,7 @@ function Clients() {
                         isCompleted
                           ? "bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
                           : isCurrent
-                            ? "bg-blue-500 text-white border-blue-500 ring-2 ring-blue-200 hover:bg-blue-600"
+                            ? "bg-green-700 text-white border-green-700 ring-2 ring-green-200 hover:bg-green-800"
                             : "bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100 hover:text-gray-600"
                       }`}
                       title={`Set to: ${stage.label}`}
@@ -947,7 +1001,7 @@ function Clients() {
                       setGeneratingClientSummary(false);
                     }
                   }}
-                  className="text-xs px-3 py-1 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"
+                  className="text-xs px-3 py-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium"
                 >
                   {aiSummaryText ? "Regenerate with AI" : "Generate with AI"}
                 </button>
@@ -1971,7 +2025,7 @@ function Clients() {
                       {/* Collapsed preview - no AI Summary label */}
                       {!isExpanded && meeting.summary && (
                         <p className="ml-6 mt-1 text-xs text-gray-500 leading-relaxed line-clamp-2">
-                          {meeting.meeting_type === "email" ? stripEmailSignOff(stripHtmlToText(meeting.summary)) : stripHtmlToText(meeting.summary)}
+                          {meeting.meeting_type === "email" ? stripEmailSignOff(stripHtmlToText(meeting.summary)) : parseSummary(stripHtmlToText(meeting.summary)).tldr}
                         </p>
                       )}
                       {!isExpanded && !meeting.summary && meeting.meeting_type === "email" && meeting.notes && (
@@ -1991,11 +2045,8 @@ function Clients() {
                           <div className="bg-white border border-gray-200 rounded-lg p-3">
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-2">
-                                <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
-                                  AI Summary
-                                </h4>
                                 <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-600 font-medium">
-                                  Auto-generated
+                                  AI generated
                                 </span>
                               </div>
                               {!isEditingSummary && (
@@ -2076,7 +2127,21 @@ function Clients() {
                                 </div>
                               </div>
                             ) : (
-                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{meeting.meeting_type === "email" ? stripEmailSignOff(stripHtmlToText(meeting.summary)) : stripHtmlToText(meeting.summary)}</p>
+                              (() => {
+                                if (meeting.meeting_type === "email") {
+                                  return <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripEmailSignOff(stripHtmlToText(meeting.summary))}</p>;
+                                }
+                                const { tldr, detailed } = parseSummary(meeting.summary || "");
+                                if (!detailed) {
+                                  return <p className="text-sm text-gray-700 whitespace-pre-wrap">{stripHtmlToText(tldr)}</p>;
+                                }
+                                return (
+                                  <div>
+                                    <p className="text-sm text-gray-600 italic mb-2">{tldr}</p>
+                                    <StructuredSummary content={detailed} />
+                                  </div>
+                                );
+                              })()
                             )}
                           </div>
                         )}
@@ -2143,14 +2208,69 @@ function Clients() {
                           </div>
                           {editingNotesId === meeting.id ? (
                             <div>
-                              <textarea
-                                value={editedNotes}
-                                onChange={(e) => setEditedNotes(e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                                rows={3}
-                                placeholder="Add notes for additional context..."
-                                autoFocus
-                              />
+                              <div className="relative">
+                                <textarea
+                                  value={editedNotes}
+                                  onChange={(e) => setEditedNotes(e.target.value)}
+                                  className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                  rows={3}
+                                  placeholder="Add notes for additional context..."
+                                  autoFocus
+                                />
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (dictatingNotesId === meeting.id) {
+                                      // Stop recording and transcribe
+                                      try {
+                                        const wavData = await invoke<number[]>("stop_recording");
+                                        setDictatingNotesId(null);
+                                        const hasModel = await invoke<boolean>("check_whisper_model");
+                                        if (!hasModel) {
+                                          setAiError("Whisper model not found. Download it in Settings first.");
+                                          return;
+                                        }
+                                        const transcript = await invoke<string>("transcribe_audio", { audioData: wavData });
+                                        setEditedNotes((prev) => prev ? prev + " " + transcript.trim() : transcript.trim());
+                                      } catch (err) {
+                                        console.error("Dictation failed:", err);
+                                        setAiError(String(err));
+                                        setDictatingNotesId(null);
+                                      }
+                                    } else {
+                                      // Start recording
+                                      try {
+                                        await invoke<string>("start_recording");
+                                        setDictatingNotesId(meeting.id ?? null);
+                                      } catch (err) {
+                                        console.error("Failed to start recording:", err);
+                                        setAiError(String(err));
+                                      }
+                                    }
+                                  }}
+                                  className={`absolute right-2 top-2 p-1.5 rounded-full transition-colors ${
+                                    dictatingNotesId === meeting.id
+                                      ? "bg-red-100 text-red-600 hover:bg-red-200 animate-pulse"
+                                      : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                                  }`}
+                                  title={dictatingNotesId === meeting.id ? "Stop dictation" : "Dictate note"}
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    {dictatingNotesId === meeting.id ? (
+                                      <rect x="6" y="6" width="12" height="12" rx="1" strokeWidth={2} />
+                                    ) : (
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M12 15a3 3 0 003-3V5a3 3 0 00-6 0v7a3 3 0 003 3z" />
+                                    )}
+                                  </svg>
+                                </button>
+                              </div>
+                              {dictatingNotesId === meeting.id && (
+                                <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                                  <span className="inline-block w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                                  Recording... click mic to stop and transcribe
+                                </p>
+                              )}
                               <div className="flex gap-2 mt-2">
                                 <button
                                   onClick={async () => {
@@ -2237,8 +2357,8 @@ function Clients() {
 
           {/* Document List */}
           {clientDocuments.length === 0 ? (
-            <div className="text-center py-6 text-gray-500">
-              <p>No documents uploaded yet for this client.</p>
+            <div className="text-center py-2 text-gray-500">
+              <p className="text-sm">No documents uploaded yet for this client.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -2394,7 +2514,7 @@ function Clients() {
 
           {/* Upload Area */}
           <div
-            className={`border-2 border-dashed rounded-lg p-6 text-center mt-4 transition-colors ${
+            className={`border-2 border-dashed rounded-lg p-3 text-center mt-3 transition-colors ${
               dragOver ? "border-primary-400 bg-primary-50" : "border-gray-300"
             }`}
             onDragOver={(e) => {
@@ -2404,28 +2524,30 @@ function Clients() {
             onDragLeave={() => setDragOver(false)}
             onDrop={handleFileDrop}
           >
-            <svg
-              className="w-10 h-10 mx-auto text-gray-400 mb-3"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-              />
-            </svg>
-            <p className="text-gray-600 mb-3">
-              {dragOver ? "Drop file here" : "Drag & drop or browse to upload"}
-            </p>
-            <button className="btn-primary" onClick={() => fileInputRef.current?.click()}>
-              Browse Files
-            </button>
-            <p className="text-xs text-gray-400 mt-3">
-              Supported: PDF, JPG, PNG (max 10MB per file)
-            </p>
+            <div className="flex items-center justify-center gap-3">
+              <svg
+                className="w-6 h-6 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                />
+              </svg>
+              <p className="text-sm text-gray-500">
+                {dragOver ? "Drop file here" : "Drag & drop or"}
+              </p>
+              <button className="btn-primary text-sm px-3 py-1" onClick={() => fileInputRef.current?.click()}>
+                Browse Files
+              </button>
+              <p className="text-xs text-gray-400">
+                PDF, JPG, PNG (max 10MB)
+              </p>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
@@ -2799,7 +2921,14 @@ function Clients() {
                       onClick={() => handleSelectClient(client)}
                     >
                       <td className="py-3">
-                        {client.first_name} {client.last_name}
+                        <div className="flex items-center gap-2">
+                          <span>{client.first_name} {client.last_name}</span>
+                          {(client.deal_count ?? 0) > 0 && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                              {client.deal_count} deal{client.deal_count !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3">
                         <div className="text-sm">{client.email}</div>

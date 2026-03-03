@@ -6,7 +6,7 @@ use crate::db::{get_opt_f64, AppState, Client};
 pub fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, home_ownership, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at, ai_summary FROM clients ORDER BY created_at DESC")
+        .prepare("SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.income, c.payg, c.assets, c.liabilities, c.notes, c.home_address, c.investment_addresses, c.properties_viewing, c.available_deposit, c.monthly_expenses, c.goals, c.home_ownership, c.client_status, c.referral_source, c.pipeline_stage, c.current_lender, c.current_loan_balance, c.current_interest_rate, c.current_loan_type, c.created_at, c.updated_at, c.ai_summary, COALESCE((SELECT COUNT(*) FROM deals d WHERE d.client_id = c.id), 0) as deal_count FROM clients c ORDER BY c.created_at DESC")
         .map_err(|e| e.to_string())?;
 
     let clients = stmt
@@ -39,6 +39,7 @@ pub fn get_clients(state: State<AppState>) -> Result<Vec<Client>, String> {
                 created_at: row.get(24)?,
                 updated_at: row.get(25)?,
                 ai_summary: row.get(26)?,
+                deal_count: row.get(27)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -187,6 +188,7 @@ pub fn find_client_by_email(state: State<AppState>, email: String) -> Result<Opt
                 created_at: row.get(24)?,
                 updated_at: row.get(25)?,
                 ai_summary: row.get(26)?,
+                deal_count: 0,
             })
         },
     );

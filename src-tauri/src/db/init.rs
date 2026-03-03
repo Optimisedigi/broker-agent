@@ -302,6 +302,261 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
                 "Strong equity position from first property. Rental income helps serviceability. Compare ANZ vs Westpac investor rates. Sarah also mentioned wanting to look at Rose Bay and Coogee for future purchases.",
             ],
         )?;
+        // Insert dummy client: James Chen (existing client)
+        conn.execute(
+            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            [
+                "James", "Chen",
+                "james.chen@email.com", "0423 456 789",
+                "220000", "55000", "1800000", "950000",
+                "High-income professional. Owns two investment properties, looking to refinance both for better rates.",
+                "18 Bronte Rd, Bronte NSW 2024",
+                "7/45 Macleay St, Potts Point NSW 2011 | $1,100,000\n22 Cook Rd, Centennial Park NSW 2021 | $1,650,000",
+                "",
+                "180000", "8200",
+                "Year 1: Refinance existing loans to sub-5.5%\nYear 3: Acquire third investment property\nYear 7: Portfolio value exceeding $5M",
+                "existing",
+                "Word of Mouth",
+                "refinance_assessment",
+                "Macquarie", "1450000", "6.15", "Variable",
+                "2023-06-10T09:00:00+10:00",
+                "2026-01-15T11:00:00+11:00",
+            ],
+        )?;
+
+        let james_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO meetings (client_id, title, recording_path, transcript, summary, meeting_date, duration_seconds, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            [
+                &james_id.to_string(),
+                "Annual Loan Review - Refinance Options",
+                "",
+                "",
+                "Reviewed James's two investment loans with Macquarie. Combined balance of $1.45M at 6.15% variable. Strong equity position with properties valued at $2.75M total. Discussed CBA and ANZ offerings for investor rates. James wants to lock a portion at fixed for stability.",
+                "2026-01-15T11:00:00+11:00",
+                "2400",
+                "Well-informed client. Wants rate comparison spreadsheet by end of week. Prefers split loan structure.",
+            ],
+        )?;
+
+        // Insert dummy client: Priya Sharma (existing client)
+        conn.execute(
+            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            [
+                "Priya", "Sharma",
+                "priya.sharma@email.com", "0434 567 890",
+                "145000", "32000", "920000", "480000",
+                "Purchased first home in 2024, now looking at investment opportunities. Works in tech industry.",
+                "5/28 Victoria St, Darlinghurst NSW 2010",
+                "12 George St, Marrickville NSW 2204 | $780,000",
+                "9 Station St, Newtown NSW 2042",
+                "95000", "4800",
+                "Year 1: Build equity in current investment\nYear 3: Purchase second investment in inner west\nYear 5: Generate $60K+ passive rental income",
+                "existing",
+                "Google",
+                "complete",
+                "Westpac", "620000", "5.49", "Fixed",
+                "2024-01-20T10:00:00+11:00",
+                "2025-11-10T16:00:00+11:00",
+            ],
+        )?;
+
+        let priya_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO meetings (client_id, title, recording_path, transcript, summary, meeting_date, duration_seconds, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            [
+                &priya_id.to_string(),
+                "Investment Property Settlement Review",
+                "",
+                "",
+                "Priya's first investment at 12 George St, Marrickville has settled. Loan of $620K at 5.49% fixed for 3 years with Westpac. Rental appraisal at $650/week. Discussed offset strategy and next steps for building equity before second purchase.",
+                "2025-11-10T16:00:00+11:00",
+                "1800",
+                "Settlement went smoothly. Rental income strong for the area. Set reminder to review fixed rate expiry in 2027.",
+            ],
+        )?;
+
+        // Insert dummy client: Tom Bradley (new client)
+        conn.execute(
+            "INSERT INTO clients (first_name, last_name, email, phone, income, payg, assets, liabilities, notes, home_address, investment_addresses, properties_viewing, available_deposit, monthly_expenses, goals, client_status, referral_source, pipeline_stage, current_lender, current_loan_balance, current_interest_rate, current_loan_type, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            [
+                "Tom", "Bradley",
+                "tom.bradley@email.com", "0445 678 901",
+                "125000", "28000", "350000", "15000",
+                "First home buyer referred by real estate agent. Looking to purchase in the Inner West within 3 months.",
+                "",
+                "",
+                "44 Marrickville Rd, Marrickville NSW 2204\n10/88 Enmore Rd, Enmore NSW 2042",
+                "110000", "3500",
+                "Purchase first home under $900K in Inner West\nMinimise LMI where possible\nSettle before end of financial year",
+                "new",
+                "Real Estate Agent",
+                "financial_assessment",
+                "", "0", "0", "",
+                "2026-02-28T09:00:00+11:00",
+                "2026-02-28T09:00:00+11:00",
+            ],
+        )?;
+
+        let tom_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO meetings (client_id, title, recording_path, transcript, summary, meeting_date, duration_seconds, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            [
+                &tom_id.to_string(),
+                "Discovery Call - First Home Purchase",
+                "",
+                "",
+                "Tom is a first home buyer with $110K deposit and household income of $125K. Looking at apartments in Marrickville and Enmore under $900K. Eligible for First Home Buyer Guarantee. Discussed pre-approval timeline and document requirements.",
+                "2026-02-28T09:00:00+11:00",
+                "2100",
+                "Keen buyer, motivated to move quickly. Send document checklist by tomorrow. Check FHBG eligibility with Westpac and CBA.",
+            ],
+        )?;
+    }
+
+    // Seed dummy deals if none exist (updated to include new clients)
+    let deal_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM deals", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    if deal_count == 0 {
+        // Get client IDs
+        let sarah_id: i64 = conn
+            .query_row("SELECT id FROM clients WHERE first_name = 'Sarah' AND last_name = 'Mitchell'", [], |row| row.get(0))
+            .unwrap_or(0);
+        let james_id: i64 = conn
+            .query_row("SELECT id FROM clients WHERE first_name = 'James' AND last_name = 'Chen'", [], |row| row.get(0))
+            .unwrap_or(0);
+        let priya_id: i64 = conn
+            .query_row("SELECT id FROM clients WHERE first_name = 'Priya' AND last_name = 'Sharma'", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        if sarah_id > 0 {
+            // Sarah's Deal 1: Bondi investment property
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    sarah_id, "15 Ocean Ave, Bondi NSW 2026", 780000.0,
+                    "2022-04-10", "2022-06-20", 3.89,
+                    "Commonwealth Bank", "fixed", "active",
+                    "First investment property. 2-year fixed rate. LVR 78%.",
+                    "2022-06-20T14:00:00+10:00", "2024-03-15T10:00:00+11:00"
+                ],
+            )?;
+            let deal1_id = conn.last_insert_rowid();
+
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal1_id, "purchase", "2022-04-10", "Contract exchanged for 15 Ocean Ave, Bondi", "", "$780,000", "2022-04-10T10:00:00+10:00"],
+            )?;
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal1_id, "settlement", "2022-06-20", "Settlement completed through CBA", "", "Settled", "2022-06-20T14:00:00+10:00"],
+            )?;
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal1_id, "rate_change", "2024-04-10", "Fixed period expired, rolled to variable rate", "3.89%", "6.49%", "2024-04-10T09:00:00+10:00"],
+            )?;
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal1_id, "refinance", "2024-06-01", "Refinanced to ANZ for better investor rate", "CBA 6.49%", "ANZ 5.99%", "2024-06-01T11:00:00+10:00"],
+            )?;
+
+            // Sarah's Deal 2: North Sydney unit
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    sarah_id, "8/120 Pacific Hwy, North Sydney NSW 2060", 820000.0,
+                    "2024-09-15", "2024-11-20", 5.89,
+                    "Westpac", "variable", "active",
+                    "Second investment property. Used equity from Bondi property.",
+                    "2024-11-20T10:00:00+11:00", "2024-11-20T10:00:00+11:00"
+                ],
+            )?;
+            let deal2_id = conn.last_insert_rowid();
+
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal2_id, "purchase", "2024-09-15", "Contract exchanged for 8/120 Pacific Hwy, North Sydney", "", "$820,000", "2024-09-15T10:00:00+10:00"],
+            )?;
+            conn.execute(
+                "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![deal2_id, "settlement", "2024-11-20", "Settlement completed through Westpac Premier Advantage", "", "Settled", "2024-11-20T10:00:00+11:00"],
+            )?;
+        }
+
+        if james_id > 0 {
+            // James's Deal 1: Potts Point unit
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    james_id, "7/45 Macleay St, Potts Point NSW 2011", 880000.0,
+                    "2023-07-20", "2023-09-15", 5.79,
+                    "Macquarie", "variable", "active",
+                    "First investment property. Used savings for 20% deposit.",
+                    "2023-09-15T10:00:00+10:00", "2023-09-15T10:00:00+10:00"
+                ],
+            )?;
+
+            // James's Deal 2: Centennial Park house
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    james_id, "22 Cook Rd, Centennial Park NSW 2021", 1320000.0,
+                    "2024-03-10", "2024-05-20", 6.15,
+                    "Macquarie", "variable", "active",
+                    "Second investment property. Leveraged equity from Potts Point.",
+                    "2024-05-20T14:00:00+10:00", "2024-05-20T14:00:00+10:00"
+                ],
+            )?;
+
+            // James's Deal 3: Looking to refinance (pending)
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    james_id, "Refinance - Combined Portfolio", 1450000.0,
+                    "", "", 0.0,
+                    "", "variable", "pending",
+                    "Refinance both investment loans. Targeting sub-5.5% rate with CBA or ANZ.",
+                    "2026-01-15T11:00:00+11:00", "2026-01-15T11:00:00+11:00"
+                ],
+            )?;
+        }
+
+        if priya_id > 0 {
+            // Priya's Deal 1: Marrickville investment
+            conn.execute(
+                "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![
+                    priya_id, "12 George St, Marrickville NSW 2204", 620000.0,
+                    "2025-08-15", "2025-11-10", 5.49,
+                    "Westpac", "fixed", "settled",
+                    "First investment property. 3-year fixed rate. Rental appraisal $650/week.",
+                    "2025-11-10T16:00:00+11:00", "2025-11-10T16:00:00+11:00"
+                ],
+            )?;
+        }
     }
 
     // Seed dummy bank policies if none exist
@@ -330,78 +585,6 @@ pub fn init_db(conn: &Connection) -> SqliteResult<()> {
                 [bank, name, &min_inc.to_string(), &max_ltv.to_string(), &rate.to_string(), reqs, notes],
             )?;
         }
-    }
-
-    // Seed dummy deals if none exist
-    let deal_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM deals", [], |row| row.get(0))
-        .unwrap_or(0);
-
-    if deal_count == 0 && client_count > 0 {
-        let sarah_id: i64 = conn
-            .query_row("SELECT id FROM clients WHERE first_name = 'Sarah' AND last_name = 'Mitchell'", [], |row| row.get(0))
-            .unwrap_or(1);
-
-        // Deal 1: Bondi investment property
-        conn.execute(
-            "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            rusqlite::params![
-                sarah_id, "15 Ocean Ave, Bondi NSW 2026", 780000.0,
-                "2022-04-10", "2022-06-20", 3.89,
-                "Commonwealth Bank", "fixed", "active",
-                "First investment property. 2-year fixed rate. LVR 78%.",
-                "2022-06-20T14:00:00+10:00", "2024-03-15T10:00:00+11:00"
-            ],
-        )?;
-        let deal1_id = conn.last_insert_rowid();
-
-        // Deal 1 events
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal1_id, "purchase", "2022-04-10", "Contract exchanged for 15 Ocean Ave, Bondi", "", "$780,000", "2022-04-10T10:00:00+10:00"],
-        )?;
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal1_id, "settlement", "2022-06-20", "Settlement completed through CBA", "", "Settled", "2022-06-20T14:00:00+10:00"],
-        )?;
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal1_id, "rate_change", "2024-04-10", "Fixed period expired, rolled to variable rate", "3.89%", "6.49%", "2024-04-10T09:00:00+10:00"],
-        )?;
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal1_id, "refinance", "2024-06-01", "Refinanced to ANZ for better investor rate", "CBA 6.49%", "ANZ 5.99%", "2024-06-01T11:00:00+10:00"],
-        )?;
-
-        // Deal 2: North Sydney unit
-        conn.execute(
-            "INSERT INTO deals (client_id, property_address, loan_amount, purchase_date, settlement_date, interest_rate, lender_name, loan_type, status, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            rusqlite::params![
-                sarah_id, "8/120 Pacific Hwy, North Sydney NSW 2060", 820000.0,
-                "2024-09-15", "2024-11-20", 5.89,
-                "Westpac", "variable", "active",
-                "Second investment property. Used equity from Bondi property.",
-                "2024-11-20T10:00:00+11:00", "2024-11-20T10:00:00+11:00"
-            ],
-        )?;
-        let deal2_id = conn.last_insert_rowid();
-
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal2_id, "purchase", "2024-09-15", "Contract exchanged for 8/120 Pacific Hwy, North Sydney", "", "$820,000", "2024-09-15T10:00:00+10:00"],
-        )?;
-        conn.execute(
-            "INSERT INTO deal_events (deal_id, event_type, event_date, description, old_value, new_value, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![deal2_id, "settlement", "2024-11-20", "Settlement completed through Westpac Premier Advantage", "", "Settled", "2024-11-20T10:00:00+11:00"],
-        )?;
     }
 
     Ok(())

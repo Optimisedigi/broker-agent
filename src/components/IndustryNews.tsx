@@ -7,6 +7,7 @@ interface NewsArticle {
   blurb: string;
   source: string;
   date: string;
+  image?: string;
 }
 
 const NEWS_ARTICLES: NewsArticle[] = [
@@ -18,6 +19,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "The Reserve Bank of Australia raised the official cash rate by 25 basis points to 3.85 per cent at its February meeting, the first hike in more than two years. Lenders are expected to pass the increase onto variable mortgage rates, with NAB already confirming a 0.25% rise effective 13 February.",
     source: "Reserve Bank of Australia",
     date: "3 Feb 2026",
+    image: "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=400&q=80",
   },
   {
     id: 2,
@@ -27,6 +29,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "Banks are now limited to issuing only 20% of new mortgages to borrowers whose debt exceeds six times their income. The macroprudential measure targets a build-up of riskier lending, particularly among investors who typically borrow at higher DTI ratios.",
     source: "APRA",
     date: "1 Feb 2026",
+    image: "https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=400&q=80",
   },
   {
     id: 3,
@@ -36,6 +39,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "KPMG's latest Residential Property Outlook predicts continued momentum in the property market, with Perth set to lead at nearly 13% growth. Brisbane house prices are expected to climb 11%, while Sydney is forecast for a more moderate 5.8% increase.",
     source: "KPMG",
     date: "28 Jan 2026",
+    image: "https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=400&q=80",
   },
   {
     id: 4,
@@ -45,6 +49,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "The time to save a 20% deposit now stretches up to seven years and seven months for a house in Sydney. Entry-level house prices have surged 68% nationally over five years, while wages grew just 21%, widening the gap for aspiring homeowners.",
     source: "Australian Broker News",
     date: "28 Feb 2026",
+    image: "https://images.unsplash.com/photo-1560520031-3a4dc4e9de0c?w=400&q=80",
   },
   {
     id: 5,
@@ -54,6 +59,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "All four major banks expect the RBA to hold the cash rate steady at 3.85% at the 16-17 March meeting. However, if Q1 trimmed mean inflation remains above 3%, three of the four expect another 25bp hike in May, taking the cash rate to 4.10%.",
     source: "Canstar",
     date: "2 Mar 2026",
+    image: "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=400&q=80",
   },
   {
     id: 6,
@@ -63,6 +69,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "Raine & Horne research shows listings up nearly 40% since December 2025 and property appraisals surging over 75% month-on-month. Buyer demand remains resilient with open inspection attendances up 3% year-on-year nationally.",
     source: "Raine & Horne",
     date: "26 Feb 2026",
+    image: "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=400&q=80",
   },
   {
     id: 7,
@@ -72,6 +79,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "The 2026 changes to the First Home Guarantee remove previous income limits and annual place caps while increasing property price thresholds in many regions. The reforms aim to give more first home buyers a pathway into homeownership.",
     source: "Australian Government",
     date: "1 Jan 2026",
+    image: "https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=400&q=80",
   },
   {
     id: 8,
@@ -81,6 +89,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "Perth, Brisbane, and Adelaide continue to pull ahead of Sydney and Melbourne in price growth, creating a pronounced two-speed market. Analysts attribute the divergence to relative affordability, interstate migration, and limited housing supply in smaller capitals.",
     source: "API Magazine",
     date: "24 Feb 2026",
+    image: "https://images.unsplash.com/photo-1449844908441-8829872d2607?w=400&q=80",
   },
   {
     id: 9,
@@ -90,6 +99,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "APRA is proposing a new tier of Most Significant Financial Institutions for banks with over $300 billion in assets. The framework aims to embed proportionality and drive competition, with submissions closing 27 February 2026.",
     source: "APRA",
     date: "10 Feb 2026",
+    image: "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=400&q=80",
   },
   {
     id: 10,
@@ -99,6 +109,7 @@ const NEWS_ARTICLES: NewsArticle[] = [
       "For an owner-occupier with $600,000 in debt and 25 years remaining, the February rate hike increases minimum monthly repayments by approximately $90. Brokers are advising clients to stress-test budgets ahead of a potential second hike in May.",
     source: "NAB",
     date: "14 Feb 2026",
+    image: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?w=400&q=80",
   },
 ];
 
@@ -115,22 +126,22 @@ function IndustryNews() {
   return (
     <div className="space-y-6">
       {/* AI TLDR Section */}
-      <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-5">
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-5">
         <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-8 h-8 rounded-lg bg-gray-700 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <svg className="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-sm font-bold text-purple-800">AI Daily Briefing</h3>
+              <h3 className="text-sm font-bold text-white">AI Daily Briefing</h3>
               <span className="text-xs px-2 py-0.5 rounded-full bg-purple-200 text-purple-700 font-medium">
-                Auto-generated
+                AI generated
               </span>
             </div>
-            <p className="text-sm text-gray-700 leading-relaxed">{AI_TLDR}</p>
-            <p className="text-xs text-purple-500 mt-2">
+            <p className="text-sm text-gray-300 leading-relaxed">{AI_TLDR}</p>
+            <p className="text-xs text-gray-500 mt-2">
               Generated from {NEWS_ARTICLES.length} articles across {new Set(NEWS_ARTICLES.map((a) => a.source)).size} sources
             </p>
           </div>
@@ -157,10 +168,8 @@ function IndustryNews() {
                   className="w-full text-left group"
                 >
                   <div className="flex gap-3 p-2 rounded-lg hover:bg-gray-50 transition-colors">
-                    <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-gray-200 to-gray-300 flex-shrink-0 flex items-center justify-center">
-                      <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
-                      </svg>
+                    <div className="w-16 h-16 rounded-lg bg-gray-200 flex-shrink-0 overflow-hidden">
+                      <img src={article.image} alt="" className="w-full h-full object-cover" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-gray-800 leading-tight group-hover:text-primary-700 line-clamp-3">
@@ -259,10 +268,8 @@ function IndustryNews() {
                 </h3>
                 <p className="text-sm text-gray-500 leading-relaxed line-clamp-2">{article.blurb}</p>
               </div>
-              <div className="w-24 h-24 rounded-lg bg-gradient-to-br from-gray-200 to-gray-300 flex-shrink-0 flex items-center justify-center">
-                <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
-                </svg>
+              <div className="w-24 h-24 rounded-lg bg-gray-200 flex-shrink-0 overflow-hidden">
+                <img src={article.image} alt="" className="w-full h-full object-cover" />
               </div>
             </div>
           </button>
