@@ -65,7 +65,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Broker Agent ${{ github.ref_name }}"
           releaseBody: "See README for installation instructions."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --bundles dmg,updater
 
@@ -97,6 +97,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Broker Agent ${{ github.ref_name }}"
           releaseBody: "See README for installation instructions."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --bundles nsis,updater
