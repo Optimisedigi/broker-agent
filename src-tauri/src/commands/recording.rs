@@ -203,9 +203,34 @@ pub fn stop_recording(recording: State<RecordingState>) -> Result<Vec<u8>, Strin
     Ok(wav_data)
 }
 
-// Whisper model
-const WHISPER_MODEL_FILENAME: &str = "ggml-large-v3.bin";
-const WHISPER_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin";
+// Whisper models
+struct WhisperModel {
+    filename: &'static str,
+    url: &'static str,
+    label: &'static str,
+    size_label: &'static str,
+}
+
+const MODELS: &[WhisperModel] = &[
+    WhisperModel {
+        filename: "ggml-medium.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+        label: "Medium",
+        size_label: "~1.5 GB",
+    },
+    WhisperModel {
+        filename: "ggml-large-v3.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        label: "Large",
+        size_label: "~3.1 GB",
+    },
+];
+
+fn get_model_info(model_size: &str) -> Result<&'static WhisperModel, String> {
+    MODELS.iter()
+        .find(|m| m.label.eq_ignore_ascii_case(model_size))
+        .ok_or_else(|| format!("Unknown model size: {}. Use 'medium' or 'large'.", model_size))
+}
 
 fn get_model_dir() -> Result<std::path::PathBuf, String> {
     let dir = dirs::data_dir()
@@ -215,36 +240,57 @@ fn get_model_dir() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
-fn get_model_path() -> Result<std::path::PathBuf, String> {
-    Ok(get_model_dir()?.join(WHISPER_MODEL_FILENAME))
+fn gpu_available() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 #[tauri::command]
 pub fn check_whisper_model() -> Result<bool, String> {
-    let path = get_model_path()?;
-    Ok(path.exists())
+    let dir = get_model_dir()?;
+    Ok(MODELS.iter().any(|m| dir.join(m.filename).exists()))
 }
 
 #[tauri::command]
 pub fn get_whisper_model_status() -> Result<serde_json::Value, String> {
-    let path = get_model_path()?;
-    let exists = path.exists();
-    let size = if exists {
-        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
+    let dir = get_model_dir()?;
+    let models: Vec<serde_json::Value> = MODELS.iter().map(|m| {
+        let path = dir.join(m.filename);
+        let exists = path.exists();
+        let size = if exists {
+            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        serde_json::json!({
+            "id": m.label.to_lowercase(),
+            "label": m.label,
+            "filename": m.filename,
+            "size_label": m.size_label,
+            "downloaded": exists,
+            "size_bytes": size,
+            "path": path.to_string_lossy(),
+        })
+    }).collect();
+
+    // Find the active model (largest downloaded model)
+    let active = MODELS.iter().rev()
+        .find(|m| dir.join(m.filename).exists())
+        .map(|m| m.label.to_lowercase());
+
     Ok(serde_json::json!({
-        "downloaded": exists,
-        "model_name": WHISPER_MODEL_FILENAME,
-        "size_bytes": size,
-        "path": path.to_string_lossy(),
+        "models": models,
+        "active_model": active,
+        "gpu_available": gpu_available(),
+        "gpu_backend": if cfg!(target_os = "macos") { "Metal" } else if cfg!(target_os = "windows") { "Vulkan" } else { "None" },
     }))
 }
 
 #[tauri::command]
-pub async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
-    let model_path = get_model_path()?;
+pub async fn download_whisper_model(app: AppHandle, model_size: Option<String>) -> Result<String, String> {
+    let size = model_size.unwrap_or_else(|| "medium".to_string());
+    let model_info = get_model_info(&size)?;
+    let model_path = get_model_dir()?.join(model_info.filename);
+
     if model_path.exists() {
         return Ok("Model already downloaded".to_string());
     }
@@ -253,7 +299,7 @@ pub async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
 
     let client = reqwest::Client::new();
     let resp = client
-        .get(WHISPER_MODEL_URL)
+        .get(model_info.url)
         .send()
         .await
         .map_err(|e| format!("Download request failed: {}", e))?;
@@ -299,80 +345,138 @@ pub async fn download_whisper_model(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn transcribe_audio(audio_data: Vec<u8>) -> Result<String, String> {
-    let model_path = get_model_path()?;
-    if !model_path.exists() {
-        return Err("Whisper model not downloaded. Go to Settings to download it.".to_string());
+pub async fn delete_whisper_model(model_size: String) -> Result<String, String> {
+    let model_info = get_model_info(&model_size)?;
+    let model_path = get_model_dir()?.join(model_info.filename);
+    if model_path.exists() {
+        std::fs::remove_file(&model_path)
+            .map_err(|e| format!("Failed to delete model: {}", e))?;
     }
+    Ok("Model deleted".to_string())
+}
 
-    // Parse WAV file
-    let cursor = std::io::Cursor::new(audio_data);
-    let mut reader = hound::WavReader::new(cursor)
-        .map_err(|e| format!("Failed to read WAV data: {}", e))?;
+#[tauri::command]
+pub fn set_active_whisper_model(model_size: String) -> Result<String, String> {
+    let model_info = get_model_info(&model_size)?;
+    let model_path = get_model_dir()?.join(model_info.filename);
+    if !model_path.exists() {
+        return Err(format!("{} model is not downloaded yet", model_info.label));
+    }
+    // Store preference
+    let pref_path = get_model_dir()?.join("active_model.txt");
+    std::fs::write(&pref_path, model_size.to_lowercase())
+        .map_err(|e| format!("Failed to save preference: {}", e))?;
+    Ok(format!("Active model set to {}", model_info.label))
+}
 
-    let spec = reader.spec();
-    let samples: Vec<f32> = if spec.sample_format == hound::SampleFormat::Float {
-        reader.samples::<f32>()
-            .filter_map(|s| s.ok())
-            .collect()
-    } else {
-        reader.samples::<i16>()
-            .filter_map(|s| s.ok())
-            .map(|s| s as f32 / 32768.0)
-            .collect()
-    };
-
-    // Convert to mono if stereo
-    let mono_samples: Vec<f32> = if spec.channels == 2 {
-        samples.chunks(2).map(|c| (c[0] + c.get(1).copied().unwrap_or(0.0)) / 2.0).collect()
-    } else {
-        samples
-    };
-
-    // Resample to 16kHz if needed
-    let target_rate = 16000;
-    let resampled = if spec.sample_rate != target_rate {
-        let ratio = spec.sample_rate as f64 / target_rate as f64;
-        let new_len = (mono_samples.len() as f64 / ratio) as usize;
-        (0..new_len)
-            .map(|i| {
-                let src_idx = (i as f64 * ratio) as usize;
-                mono_samples.get(src_idx).copied().unwrap_or(0.0)
-            })
-            .collect()
-    } else {
-        mono_samples
-    };
-
-    // Initialize whisper
-    let ctx = whisper_rs::WhisperContext::new_with_params(
-        model_path.to_str().unwrap(),
-        whisper_rs::WhisperContextParameters::default(),
-    )
-    .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
-
-    let mut state = ctx.create_state()
-        .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
-
-    let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("en"));
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-
-    state.full(params, &resampled)
-        .map_err(|e| format!("Transcription failed: {}", e))?;
-
-    let num_segments = state.full_n_segments()
-        .map_err(|e| format!("Failed to get segments: {}", e))?;
-
-    let mut transcript = String::new();
-    for i in 0..num_segments {
-        if let Ok(text) = state.full_get_segment_text(i) {
-            transcript.push_str(&text);
-            transcript.push(' ');
+fn get_active_model_path() -> Result<std::path::PathBuf, String> {
+    let dir = get_model_dir()?;
+    // Check for saved preference
+    let pref_path = dir.join("active_model.txt");
+    if let Ok(pref) = std::fs::read_to_string(&pref_path) {
+        if let Ok(info) = get_model_info(pref.trim()) {
+            let path = dir.join(info.filename);
+            if path.exists() {
+                return Ok(path);
+            }
         }
     }
+    // Fallback: use any downloaded model (prefer medium for speed)
+    for model in MODELS.iter() {
+        let path = dir.join(model.filename);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    Err("No Whisper model downloaded. Go to Settings to download one.".to_string())
+}
 
-    Ok(transcript.trim().to_string())
+#[tauri::command]
+pub async fn transcribe_audio(audio_data: Vec<u8>) -> Result<String, String> {
+    let model_path = get_active_model_path()?;
+
+    // Run the CPU-intensive transcription on a blocking thread
+    // so it doesn't freeze the UI / main async runtime
+    tokio::task::spawn_blocking(move || {
+        // Parse WAV file
+        let cursor = std::io::Cursor::new(audio_data);
+        let mut reader = hound::WavReader::new(cursor)
+            .map_err(|e| format!("Failed to read WAV data: {}", e))?;
+
+        let spec = reader.spec();
+        let samples: Vec<f32> = if spec.sample_format == hound::SampleFormat::Float {
+            reader.samples::<f32>()
+                .filter_map(|s| s.ok())
+                .collect()
+        } else {
+            reader.samples::<i16>()
+                .filter_map(|s| s.ok())
+                .map(|s| s as f32 / 32768.0)
+                .collect()
+        };
+
+        // Convert to mono if stereo
+        let mono_samples: Vec<f32> = if spec.channels == 2 {
+            samples.chunks(2).map(|c| (c[0] + c.get(1).copied().unwrap_or(0.0)) / 2.0).collect()
+        } else {
+            samples
+        };
+
+        // Resample to 16kHz if needed
+        let target_rate = 16000;
+        let resampled = if spec.sample_rate != target_rate {
+            let ratio = spec.sample_rate as f64 / target_rate as f64;
+            let new_len = (mono_samples.len() as f64 / ratio) as usize;
+            (0..new_len)
+                .map(|i| {
+                    let src_idx = (i as f64 * ratio) as usize;
+                    mono_samples.get(src_idx).copied().unwrap_or(0.0)
+                })
+                .collect()
+        } else {
+            mono_samples
+        };
+
+        // Initialize whisper with GPU acceleration when available
+        let mut ctx_params = whisper_rs::WhisperContextParameters::default();
+        if gpu_available() {
+            ctx_params.use_gpu(true);
+            eprintln!("[Whisper] GPU acceleration enabled");
+        }
+
+        let ctx = whisper_rs::WhisperContext::new_with_params(
+            model_path.to_str().unwrap(),
+            ctx_params,
+        )
+        .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
+
+        let mut state = ctx.create_state()
+            .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
+
+        let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("en"));
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_n_threads(std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(4));
+
+        state.full(params, &resampled)
+            .map_err(|e| format!("Transcription failed: {}", e))?;
+
+        let num_segments = state.full_n_segments();
+
+        let mut transcript = String::new();
+        for i in 0..num_segments {
+            if let Some(segment) = state.get_segment(i) {
+                if let Ok(text) = segment.to_str_lossy() {
+                    transcript.push_str(&text);
+                    transcript.push(' ');
+                }
+            }
+        }
+
+        Ok::<String, String>(transcript.trim().to_string())
+    })
+    .await
+    .map_err(|e| format!("Transcription task failed: {}", e))?
 }

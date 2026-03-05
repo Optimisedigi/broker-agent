@@ -39,12 +39,21 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
   const [screenError, setScreenError] = useState("");
 
   // Whisper model state
-  const [whisperStatus, setWhisperStatus] = useState<{
+  interface WhisperModelInfo {
+    id: string;
+    label: string;
+    filename: string;
+    size_label: string;
     downloaded: boolean;
-    model_name: string;
     size_bytes: number;
+  }
+  const [whisperStatus, setWhisperStatus] = useState<{
+    models: WhisperModelInfo[];
+    active_model: string | null;
+    gpu_available: boolean;
+    gpu_backend: string;
   } | null>(null);
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
@@ -99,17 +108,35 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
     }
   };
 
-  const handleDownloadModel = async () => {
-    setDownloading(true);
+  const handleDownloadModel = async (modelSize: string) => {
+    setDownloading(modelSize);
     setDownloadProgress(0);
     setDownloadError(null);
     try {
-      await invoke("download_whisper_model");
+      await invoke("download_whisper_model", { modelSize });
       await checkWhisperStatus();
     } catch (err: any) {
       setDownloadError(err?.toString() || "Download failed");
     } finally {
-      setDownloading(false);
+      setDownloading(null);
+    }
+  };
+
+  const handleDeleteModel = async (modelSize: string) => {
+    try {
+      await invoke("delete_whisper_model", { modelSize });
+      await checkWhisperStatus();
+    } catch (err: any) {
+      console.error("Failed to delete model:", err);
+    }
+  };
+
+  const handleSetActiveModel = async (modelSize: string) => {
+    try {
+      await invoke("set_active_whisper_model", { modelSize });
+      await checkWhisperStatus();
+    } catch (err: any) {
+      console.error("Failed to set active model:", err);
     }
   };
 
@@ -674,59 +701,141 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
       <div className="card">
         <h3 className="text-lg font-semibold mb-2">Whisper Transcription</h3>
         <p className="text-sm text-gray-500 mb-4">
-          On-device meeting transcription powered by Whisper AI large-v3. All processing happens
-          locally, no data leaves your computer.
+          On-device meeting transcription powered by Whisper AI. All processing happens locally, no
+          data leaves your computer.
         </p>
-        <div className="border border-gray-200 rounded-lg p-4">
-          {whisperStatus?.downloaded ? (
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium text-sm">{whisperStatus.model_name}</p>
-                <p className="text-xs text-gray-500">
-                  Large model, highest accuracy, on-device (
-                  {(whisperStatus.size_bytes / 1024 / 1024 / 1024).toFixed(1)} GB)
-                </p>
-              </div>
-              <div className="flex items-center gap-2 text-green-600">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-                <span className="text-sm font-medium">Ready</span>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div>
-                <p className="font-medium text-sm">ggml-large-v3.bin</p>
-                <p className="text-xs text-gray-500">
-                  High-accuracy on-device transcription (~3.1 GB download)
-                </p>
-              </div>
-              {downloading ? (
-                <div className="space-y-2">
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-primary-500 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${downloadProgress}%` }}
-                    />
+        {whisperStatus?.gpu_available && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
+            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <span className="text-sm text-green-700 font-medium">
+              GPU acceleration enabled ({whisperStatus.gpu_backend})
+            </span>
+          </div>
+        )}
+        <div className="space-y-3">
+          {whisperStatus?.models.map((model) => (
+            <div key={model.id} className="border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-sm">{model.label}</p>
+                    {model.id === "medium" && (
+                      <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                        Recommended
+                      </span>
+                    )}
+                    {model.id === "large" && (
+                      <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">
+                        Highest accuracy
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-500">Downloading... {downloadProgress}%</p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {model.filename} ({model.size_label})
+                    {model.id === "medium" && " \u2022 ~4x faster than Large"}
+                    {model.id === "large" && " \u2022 Best accuracy, slower"}
+                  </p>
                 </div>
-              ) : (
-                <div>
-                  <button onClick={handleDownloadModel} className="btn-primary text-sm">
-                    Download Model
-                  </button>
-                  {downloadError && <p className="text-xs text-red-500 mt-2">{downloadError}</p>}
+                <div className="flex items-center gap-2">
+                  {model.downloaded ? (
+                    <>
+                      {whisperStatus.active_model === model.id ? (
+                        <span className="flex items-center gap-1 text-green-600 text-sm font-medium">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Active
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleSetActiveModel(model.id)}
+                          className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          Use this
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteModel(model.id)}
+                        className="text-xs text-gray-400 hover:text-red-500 ml-2"
+                        title="Delete model"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : downloading === model.id ? (
+                    <div className="w-40 space-y-1">
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-primary-500 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${downloadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500 text-right">{downloadProgress}%</p>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleDownloadModel(model.id)}
+                      className="btn-primary text-sm"
+                      disabled={downloading !== null}
+                    >
+                      Download
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
-          )}
+          ))}
+          {downloadError && <p className="text-xs text-red-500">{downloadError}</p>}
+        </div>
+
+        {/* Estimated transcription times */}
+        <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden">
+          <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+            <p className="text-xs font-semibold text-gray-600">Estimated Transcription Times</p>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="px-4 py-2 text-left text-gray-500 font-medium">Meeting Length</th>
+                <th className="px-4 py-2 text-left text-gray-500 font-medium">Medium (GPU)</th>
+                <th className="px-4 py-2 text-left text-gray-500 font-medium">Medium (CPU)</th>
+                <th className="px-4 py-2 text-left text-gray-500 font-medium">Large (GPU)</th>
+                <th className="px-4 py-2 text-left text-gray-500 font-medium">Large (CPU)</th>
+              </tr>
+            </thead>
+            <tbody className="text-gray-600">
+              <tr className="border-b border-gray-50">
+                <td className="px-4 py-1.5 font-medium">2 minutes</td>
+                <td className="px-4 py-1.5">~5-10s</td>
+                <td className="px-4 py-1.5">~30-60s</td>
+                <td className="px-4 py-1.5">~15-30s</td>
+                <td className="px-4 py-1.5">~2-4 min</td>
+              </tr>
+              <tr className="border-b border-gray-50">
+                <td className="px-4 py-1.5 font-medium">5 minutes</td>
+                <td className="px-4 py-1.5">~15-25s</td>
+                <td className="px-4 py-1.5">~1-2 min</td>
+                <td className="px-4 py-1.5">~30-60s</td>
+                <td className="px-4 py-1.5">~4-8 min</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-1.5 font-medium">30 minutes</td>
+                <td className="px-4 py-1.5">~1-3 min</td>
+                <td className="px-4 py-1.5">~8-15 min</td>
+                <td className="px-4 py-1.5">~3-8 min</td>
+                <td className="px-4 py-1.5">~30-60 min</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="px-4 py-2 bg-gray-50 border-t border-gray-100">
+            <p className="text-[10px] text-gray-400">
+              Times are approximate and vary by device. GPU acceleration ({whisperStatus?.gpu_backend || "Metal/Vulkan"}) is used automatically when available.
+            </p>
+          </div>
         </div>
       </div>
 

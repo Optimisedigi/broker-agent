@@ -69,6 +69,8 @@ pub fn run() {
             commands::recording::check_whisper_model,
             commands::recording::get_whisper_model_status,
             commands::recording::download_whisper_model,
+            commands::recording::delete_whisper_model,
+            commands::recording::set_active_whisper_model,
             commands::recording::transcribe_audio,
             commands::ai::generate_meeting_summary,
             commands::ai::generate_client_summary,

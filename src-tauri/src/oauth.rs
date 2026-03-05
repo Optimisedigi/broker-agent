@@ -263,52 +263,67 @@ async fn wait_for_callback() -> Result<String, String> {
         .await
         .map_err(|e| format!("Failed to bind callback server: {}", e))?;
 
-    let (stream, _) = listener
-        .accept()
-        .await
-        .map_err(|e| format!("Failed to accept connection: {}", e))?;
+    // Loop to handle multiple requests (favicon, preflight, etc.)
+    // until we get one with an auth code
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(120);
+    loop {
+        let accept_result = tokio::time::timeout_at(deadline, listener.accept()).await;
+        let (stream, _) = match accept_result {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                eprintln!("[OAuth] Accept error: {}, retrying...", e);
+                continue;
+            }
+            Err(_) => return Err("OAuth callback timed out after 120 seconds".to_string()),
+        };
 
-    // Convert to std for synchronous line reading
-    let std_stream = stream
-        .into_std()
-        .map_err(|e| format!("Failed to convert stream: {}", e))?;
-    std_stream
-        .set_nonblocking(false)
-        .map_err(|e| format!("Failed to set blocking: {}", e))?;
+        // Convert to std for synchronous line reading
+        let std_stream = stream
+            .into_std()
+            .map_err(|e| format!("Failed to convert stream: {}", e))?;
+        std_stream
+            .set_nonblocking(false)
+            .map_err(|e| format!("Failed to set blocking: {}", e))?;
 
-    let mut reader = BufReader::new(&std_stream);
-    let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
-        .map_err(|e| format!("Failed to read request: {}", e))?;
+        let mut reader = BufReader::new(&std_stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            continue;
+        }
 
-    eprintln!("[OAuth] Callback request: {}", request_line.trim());
+        eprintln!("[OAuth] Callback request: {}", request_line.trim());
 
-    // Send response
-    let response_body = "<html><body><h2>Connected!</h2><p>You can close this window and return to Broker Agent.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        response_body.len(),
-        response_body
-    );
+        // Try to parse auth code from GET /callback?code=...
+        let code = request_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|path| url::Url::parse(&format!("http://localhost{}", path)).ok())
+            .and_then(|url| {
+                url.query_pairs()
+                    .find(|(k, _)| k == "code")
+                    .map(|(_, v)| v.to_string())
+            });
 
-    let mut writer = &std_stream;
-    let _ = writer.write_all(response.as_bytes());
-    let _ = writer.flush();
+        if let Some(code) = code {
+            // Got the auth code, send success response and return
+            let response_body = "<html><body><h2>Connected!</h2><p>You can close this window and return to Broker Agent.</p></body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            let mut writer = &std_stream;
+            let _ = writer.write_all(response.as_bytes());
+            let _ = writer.flush();
+            return Ok(code);
+        }
 
-    // Parse auth code from GET /callback?code=...
-    let code = request_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|path| url::Url::parse(&format!("http://localhost{}", path)).ok())
-        .and_then(|url| {
-            url.query_pairs()
-                .find(|(k, _)| k == "code")
-                .map(|(_, v)| v.to_string())
-        })
-        .ok_or_else(|| "No auth code in callback".to_string())?;
-
-    Ok(code)
+        // Not the auth code request, send a minimal response and keep waiting
+        let empty_response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let mut writer = &std_stream;
+        let _ = writer.write_all(empty_response.as_bytes());
+        let _ = writer.flush();
+    }
 }
 
 // ---------------------------------------------------------------------------
