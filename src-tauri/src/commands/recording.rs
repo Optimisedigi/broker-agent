@@ -241,7 +241,7 @@ fn get_model_dir() -> Result<std::path::PathBuf, String> {
 }
 
 fn gpu_available() -> bool {
-    cfg!(any(target_os = "macos", target_os = "windows"))
+    cfg!(target_os = "macos")
 }
 
 #[tauri::command]
@@ -281,7 +281,7 @@ pub fn get_whisper_model_status() -> Result<serde_json::Value, String> {
         "models": models,
         "active_model": active,
         "gpu_available": gpu_available(),
-        "gpu_backend": if cfg!(target_os = "macos") { "Metal" } else if cfg!(target_os = "windows") { "Vulkan" } else { "None" },
+        "gpu_backend": if cfg!(target_os = "macos") { "Metal" } else { "CPU" },
     }))
 }
 

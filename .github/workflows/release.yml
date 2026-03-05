@@ -24,8 +24,6 @@ jobs:
       - run: npm ci
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -35,7 +33,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # Prevent whisper.cpp from auto-detecting i8mm which fails on GH Actions ARM runners
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "11.0"
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
         with:
@@ -52,15 +51,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Vulkan SDK
-        run: |
-          $ver = "1.3.290.0"
-          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/VulkanSDK-$ver-Installer.exe"
-          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
-          Start-Process -FilePath .\VulkanSDK.exe -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait
-          echo "VULKAN_SDK=C:\VulkanSDK\$ver" >> $env:GITHUB_ENV
-          echo "C:\VulkanSDK\$ver\Bin" >> $env:GITHUB_PATH
 
       - uses: actions/setup-node@v4
         with:
