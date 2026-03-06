@@ -44,7 +44,7 @@
     }
   },
   "productName": "Broker Agent",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "identifier": "com.brokeragent.app",
   "plugins": {
     "updater": {

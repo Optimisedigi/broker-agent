@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.3.7)"
+        description: "Tag to release (e.g. v0.3.8)"
         required: true
 
 jobs:
@@ -56,34 +56,45 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-      - name: Build Tauri app
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0.5
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "11.0"
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
-        run: |
-          npm run tauri build -- --bundles dmg,updater
-          echo "=== Bundle output ==="
-          find src-tauri/target/release/bundle -type f -name "*.tar.gz*" -o -name "*.dmg" | sort
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
+          releaseBody: "See README for installation instructions."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+          updaterJsonKeepUniversal: true
+          args: --bundles dmg,updater
 
-      - name: Upload updater artifacts
+      - name: Save updater sig
+        run: |
+          echo "=== Looking for updater files ==="
+          find src-tauri/target/release/bundle -type f 2>/dev/null | sort
+          # The sig content is in the release asset uploaded by tauri-action
+          # Extract it from the .app.tar.gz.sig that was uploaded
+          TAG="${{ inputs.tag || github.ref_name }}"
+          # Download the sig from the release
+          gh release download "$TAG" --pattern "*.app.tar.gz.sig" --dir updater-files --repo "${{ github.repository }}" 2>/dev/null || true
+          gh release download "$TAG" --pattern "*.app.tar.gz" --dir updater-files --repo "${{ github.repository }}" 2>/dev/null || true
+          ls -la updater-files/ 2>/dev/null || echo "No updater files downloaded"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload updater artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-updater
-          path: |
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
-          if-no-files-found: error
-
-      - name: Upload release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." 2>/dev/null || true
-          gh release upload "$TAG" src-tauri/target/release/bundle/dmg/*.dmg --clobber
+          path: updater-files/
+          if-no-files-found: warn
 
   build-windows:
     runs-on: windows-latest
@@ -105,30 +116,40 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Build Tauri app
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0.5
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          npm run tauri build -- --bundles nsis,updater
-          Write-Host "=== Bundle output ==="
-          Get-ChildItem -Recurse src-tauri/target/release/bundle -Include *.exe,*.nsis.zip,*.sig | ForEach-Object { $_.FullName }
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
+          releaseBody: "See README for installation instructions."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+          updaterJsonKeepUniversal: true
+          args: --bundles nsis,updater
 
-      - name: Upload updater artifacts
+      - name: Save updater sig
+        shell: pwsh
+        run: |
+          Write-Host "=== Looking for updater files ==="
+          Get-ChildItem -Recurse src-tauri/target/release/bundle -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+          $TAG = "${{ inputs.tag || github.ref_name }}"
+          New-Item -ItemType Directory -Force -Path updater-files | Out-Null
+          gh release download "$TAG" --pattern "*.nsis.zip.sig" --dir updater-files --repo "${{ github.repository }}" 2>$null
+          gh release download "$TAG" --pattern "*.nsis.zip" --dir updater-files --repo "${{ github.repository }}" 2>$null
+          Get-ChildItem updater-files/ -ErrorAction SilentlyContinue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload updater artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-updater
-          path: |
-            src-tauri/target/release/bundle/nsis/*.nsis.zip
-            src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
-          if-no-files-found: error
-
-      - name: Upload release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $TAG = "${{ inputs.tag || github.ref_name }}"
-          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." 2>$null
-          gh release upload "$TAG" (Get-ChildItem src-tauri/target/release/bundle/nsis/*setup.exe) --clobber
+          path: updater-files/
+          if-no-files-found: warn
 
   publish-updater:
     needs: [build-macos, build-windows]
@@ -141,12 +162,14 @@ jobs:
         with:
           name: macos-updater
           path: artifacts/macos
+        continue-on-error: true
 
       - name: Download Windows updater artifacts
         uses: actions/download-artifact@v4
         with:
           name: windows-updater
           path: artifacts/windows
+        continue-on-error: true
 
       - name: Generate and upload latest.json
         env:
@@ -155,46 +178,67 @@ jobs:
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          echo "=== macOS artifacts ==="
-          find artifacts/macos -type f
-          echo "=== Windows artifacts ==="
-          find artifacts/windows -type f
-
-          # Read signatures
-          MAC_SIG=$(cat artifacts/macos/*.sig)
-          WIN_SIG=$(cat artifacts/windows/*.sig)
-
-          # Get filenames
-          MAC_FILENAME=$(basename artifacts/macos/*.tar.gz)
-          WIN_FILENAME=$(basename artifacts/windows/*.nsis.zip)
-
           REPO="${{ github.repository }}"
-          MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
-          WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
 
-          # Upload the updater bundles to the release
-          gh release upload "$TAG" artifacts/macos/*.tar.gz --clobber --repo "$REPO"
-          gh release upload "$TAG" artifacts/windows/*.nsis.zip --clobber --repo "$REPO"
+          echo "=== All artifacts ==="
+          find artifacts/ -type f 2>/dev/null || echo "No artifacts found"
+
+          # Try to get sigs from artifacts or directly from release
+          mkdir -p sigs
+
+          # macOS sig
+          if [ -f artifacts/macos/*.sig ]; then
+            MAC_SIG=$(cat artifacts/macos/*.sig)
+          else
+            gh release download "$TAG" --pattern "*.app.tar.gz.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
+            if ls sigs/*.sig 1>/dev/null 2>&1; then
+              MAC_SIG=$(cat sigs/*.sig)
+              rm sigs/*.sig
+            fi
+          fi
+
+          # Windows sig
+          if [ -f artifacts/windows/*.sig ]; then
+            WIN_SIG=$(cat artifacts/windows/*.sig)
+          else
+            gh release download "$TAG" --pattern "*.nsis.zip.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
+            if ls sigs/*.sig 1>/dev/null 2>&1; then
+              WIN_SIG=$(cat sigs/*.sig)
+            fi
+          fi
+
+          echo "MAC_SIG length: ${#MAC_SIG}"
+          echo "WIN_SIG length: ${#WIN_SIG}"
+
+          # Get the actual asset names from the release
+          MAC_ASSET=$(gh release view "$TAG" --json assets --jq '.assets[].name | select(endswith(".app.tar.gz"))' --repo "$REPO" || echo "")
+          WIN_ASSET=$(gh release view "$TAG" --json assets --jq '.assets[].name | select(endswith(".nsis.zip"))' --repo "$REPO" || echo "")
+
+          echo "MAC_ASSET: $MAC_ASSET"
+          echo "WIN_ASSET: $WIN_ASSET"
+
+          if [ -z "$MAC_SIG" ] && [ -z "$WIN_SIG" ]; then
+            echo "ERROR: No signatures found. Cannot create latest.json"
+            exit 1
+          fi
+
+          # Build platforms JSON
+          PLATFORMS="{"
+          if [ -n "$MAC_SIG" ] && [ -n "$MAC_ASSET" ]; then
+            MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_ASSET}"
+            PLATFORMS="${PLATFORMS}\"darwin-aarch64\":{\"signature\":\"${MAC_SIG}\",\"url\":\"${MAC_URL}\"}"
+          fi
+          if [ -n "$WIN_SIG" ] && [ -n "$WIN_ASSET" ]; then
+            WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_ASSET}"
+            if [ -n "$MAC_SIG" ] && [ -n "$MAC_ASSET" ]; then
+              PLATFORMS="${PLATFORMS},"
+            fi
+            PLATFORMS="${PLATFORMS}\"windows-x86_64\":{\"signature\":\"${WIN_SIG}\",\"url\":\"${WIN_URL}\"}"
+          fi
+          PLATFORMS="${PLATFORMS}}"
 
           # Create latest.json
-          cat > latest.json << ENDJSON
-          {
-            "version": "${VERSION}",
-            "notes": "See README for installation instructions.",
-            "pub_date": "${DATE}",
-            "platforms": {
-              "darwin-aarch64": {
-                "signature": "${MAC_SIG}",
-                "url": "${MAC_URL}"
-              },
-              "windows-x86_64": {
-                "signature": "${WIN_SIG}",
-                "url": "${WIN_URL}"
-              }
-            }
-          }
-          ENDJSON
+          echo "{\"version\":\"${VERSION}\",\"notes\":\"See README for installation instructions.\",\"pub_date\":\"${DATE}\",\"platforms\":${PLATFORMS}}" | python3 -m json.tool > latest.json
 
           echo "=== latest.json ==="
           cat latest.json
