@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+    branches-ignore:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.3.2)"
+        required: true
 
 jobs:
   build-macos:
@@ -62,8 +69,8 @@ jobs:
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Broker Agent ${{ github.ref_name }}"
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
           releaseBody: "See README for installation instructions."
           releaseDraft: false
           prerelease: false
@@ -94,8 +101,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Broker Agent ${{ github.ref_name }}"
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
           releaseBody: "See README for installation instructions."
           releaseDraft: false
           prerelease: false
