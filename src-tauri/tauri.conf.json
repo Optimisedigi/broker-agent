@@ -51,7 +51,7 @@
       "endpoints": [
         "https://github.com/Optimisedigi/broker-agent/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBCOEM1ODkxNERBNkNDQkQKUldTOXpLWk5rVmlNQzFDWjFTa1F1dnRYbDBNaC9YLzM0REFxUkdmblFyRkR2dlhWaVVSV0hsRXgK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzQTRDNEJFQTUwNUUzQzYKUldURzR3V2x2c1NrbytNT2MvK2pXRzdkblE3R0d3dDJxNjUwWEg1dUE4KzdRWDFwbmJPcXhJSVEK"
     }
   },
   "app": {
