@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useRef, useState } from "react";
 
 interface SettingsProps {
@@ -8,6 +9,7 @@ interface SettingsProps {
 }
 
 function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
+  const [appVersion, setAppVersion] = useState<string>("");
   const [logo, setLogo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -81,6 +83,7 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
   useEffect(() => {
+    getVersion().then(setAppVersion);
     const saved = localStorage.getItem("broker_logo");
     if (saved) setLogo(saved);
     loadProfile();
@@ -1067,6 +1070,12 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
         </div>
         {syncResult && <p className="text-sm text-green-600 mt-2">{syncResult}</p>}
       </div>
+
+      {appVersion && (
+        <div className="text-center text-xs text-gray-400 mt-6">
+          Broker Agent v{appVersion}
+        </div>
+      )}
     </div>
   );
 }

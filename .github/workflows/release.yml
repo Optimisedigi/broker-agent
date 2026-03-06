@@ -70,7 +70,6 @@ jobs:
           releaseBody: "See README for installation instructions."
           releaseDraft: false
           prerelease: false
-          args: --bundles dmg,updater
 
   build-windows:
     runs-on: windows-latest
@@ -102,4 +101,3 @@ jobs:
           releaseBody: "See README for installation instructions."
           releaseDraft: false
           prerelease: false
-          args: --bundles nsis,updater
