@@ -125,9 +125,10 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
 
-          # Strip newlines from signing key - GitHub secrets may contain line breaks
-          # that corrupt base64 decoding (symbol 10 = newline)
-          export TAURI_SIGNING_PRIVATE_KEY=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '\n\r')
+          # Write signing key to file and unset env var to avoid format issues
+          # GitHub secrets may mangle newlines; file approach is more reliable
+          printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/signing_key.txt
+          unset TAURI_SIGNING_PRIVATE_KEY
 
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
@@ -153,7 +154,7 @@ jobs:
           MAC_FILE=$(ls bundles/*.app.tar.gz 2>/dev/null | head -1)
           if [ -n "$MAC_FILE" ]; then
             echo "Signing macOS bundle..."
-            cargo tauri signer sign "$MAC_FILE"
+            cargo tauri signer sign --private-key-path /tmp/signing_key.txt "$MAC_FILE"
             MAC_SIG=$(cat "${MAC_FILE}.sig")
             MAC_FILENAME=$(basename "$MAC_FILE")
             MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
@@ -165,7 +166,7 @@ jobs:
           WIN_FILE=$(ls bundles/*-setup.exe 2>/dev/null | head -1)
           if [ -n "$WIN_FILE" ]; then
             echo "Signing Windows bundle..."
-            cargo tauri signer sign "$WIN_FILE"
+            cargo tauri signer sign --private-key-path /tmp/signing_key.txt "$WIN_FILE"
             WIN_SIG=$(cat "${WIN_FILE}.sig")
             WIN_FILENAME=$(basename "$WIN_FILE")
             WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
