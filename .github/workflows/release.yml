@@ -125,9 +125,11 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
 
-          # Write signing key to file and unset env var to avoid format issues
-          # GitHub secrets may mangle newlines; file approach is more reliable
-          printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/signing_key.txt
+          # Reconstruct signing key file: GitHub secrets may wrap the base64
+          # key data across multiple lines, but tauri signer needs it as one line
+          COMMENT=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | head -1)
+          KEY_DATA=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | tail -n +2 | tr -d '\n\r ')
+          printf '%s\n%s\n' "$COMMENT" "$KEY_DATA" > /tmp/signing_key.txt
           unset TAURI_SIGNING_PRIVATE_KEY
 
           TAG="${{ inputs.tag || github.ref_name }}"
