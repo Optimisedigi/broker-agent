@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { check } from "@tauri-apps/plugin-updater";
 import { useEffect, useRef, useState } from "react";
 
 interface SettingsProps {
@@ -10,6 +11,7 @@ interface SettingsProps {
 
 function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
   const [appVersion, setAppVersion] = useState<string>("");
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [logo, setLogo] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -84,6 +86,9 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
 
   useEffect(() => {
     getVersion().then(setAppVersion);
+    check().then((update) => {
+      if (update) setLatestVersion(update.version);
+    }).catch(() => {});
     const saved = localStorage.getItem("broker_logo");
     if (saved) setLogo(saved);
     loadProfile();
@@ -1073,7 +1078,12 @@ function Settings({ onLogoChange, onProfileChange }: SettingsProps) {
 
       {appVersion && (
         <div className="text-center text-xs text-gray-400 mt-6">
-          Broker Agent v{appVersion}
+          <span>Broker Agent v{appVersion}</span>
+          {latestVersion ? (
+            <span className="ml-2 text-amber-500">(v{latestVersion} available)</span>
+          ) : (
+            <span className="ml-2 text-green-500">— Up to date</span>
+          )}
         </div>
       )}
     </div>
