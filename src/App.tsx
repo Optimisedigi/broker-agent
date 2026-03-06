@@ -64,6 +64,10 @@ function App() {
     checkForUpdates();
     const saved = localStorage.getItem("broker_logo");
     if (saved) setLogo(saved);
+
+    // Re-check for updates every 7 days
+    const interval = setInterval(checkForUpdates, 7 * 24 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const checkForUpdates = async () => {
