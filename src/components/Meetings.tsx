@@ -35,6 +35,9 @@ function Meetings() {
   const [recentMeetings, setRecentMeetings] = useState<Meeting[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcribeElapsed, setTranscribeElapsed] = useState(0);
+  const [transcribeDuration, setTranscribeDuration] = useState<number | null>(null);
+  const transcribeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [transcriptionResult, setTranscriptionResult] = useState<string | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [whisperReady, setWhisperReady] = useState<boolean | null>(null);
@@ -216,6 +219,11 @@ function Meetings() {
   const saveMeeting = async () => {
     setIsTranscribing(true);
     setTranscriptionResult(null);
+    setTranscribeDuration(null);
+    setTranscribeElapsed(0);
+    transcribeTimerRef.current = setInterval(() => {
+      setTranscribeElapsed((prev) => prev + 1);
+    }, 1000);
 
     try {
       let transcript = "";
@@ -238,6 +246,13 @@ function Meetings() {
         console.error("Recording/transcription error:", err);
         setTranscriptionResult(`Transcription: ${err}`);
       }
+
+      // Stop transcription timer and record duration
+      if (transcribeTimerRef.current) {
+        clearInterval(transcribeTimerRef.current);
+        transcribeTimerRef.current = null;
+      }
+      setTranscribeElapsed((prev) => { setTranscribeDuration(prev); return prev; });
 
       const meeting = {
         id: null,
@@ -275,6 +290,10 @@ function Meetings() {
     } catch (error) {
       console.error("Failed to save meeting:", error);
     } finally {
+      if (transcribeTimerRef.current) {
+        clearInterval(transcribeTimerRef.current);
+        transcribeTimerRef.current = null;
+      }
       setIsTranscribing(false);
     }
   };
@@ -551,15 +570,34 @@ function Meetings() {
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-sm text-blue-700">Transcribing with Whisper...</span>
+              <div className="text-sm text-blue-700">
+                <span>Transcribing with Whisper... {Math.floor(transcribeElapsed / 60)}:{String(transcribeElapsed % 60).padStart(2, "0")}</span>
+                {recordingTime > 0 && (
+                  <span className="text-xs text-blue-500 ml-2">
+                    (est. {(() => {
+                      const est = Math.max(1, Math.round(recordingTime / 4 / 60));
+                      return est === 1 ? "~1 min" : `~${est} mins`;
+                    })()})
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
           {transcriptionResult && (
             <div className="mb-4 p-3 bg-white rounded-lg border border-gray-200">
-              <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide mb-1">
-                Transcript
-              </h4>
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
+                  Transcript
+                </h4>
+                {transcribeDuration !== null && (
+                  <span className="text-xs text-gray-400">
+                    Transcribed in {transcribeDuration >= 60
+                      ? `${Math.floor(transcribeDuration / 60)}m ${transcribeDuration % 60}s`
+                      : `${transcribeDuration}s`}
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-gray-700 whitespace-pre-wrap">{transcriptionResult}</p>
             </div>
           )}

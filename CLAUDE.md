@@ -77,3 +77,8 @@ Located at `~/Library/Application Support/BrokerageCRM/database.db`. Tables: `cl
 - Google Web Client ID: `706581607048-l3vj1b0gg3v7gt2b7ge5300dd76f92rf.apps.googleusercontent.com`
 - Microsoft Client ID: `e01aaedb-6e8b-4bbf-8220-a512eaed8956`
 - Redirect URI: `http://localhost:9876/callback`
+
+## Releases
+
+- Releases are triggered by pushing a `v*` tag (e.g. `git tag v0.4.0 && git push origin v0.4.0`)
+- **Do NOT add `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, or `APPLE_TEAM_ID` env vars to the macOS build step in `.github/workflows/release.yml`.** We don't have an Apple Developer certificate yet. Tauri uses ad-hoc signing (`signingIdentity: "-"` in `tauri.conf.json`). Adding those env vars as empty strings causes the build to fail. Re-add them only once Apple Developer credentials are configured as GitHub secrets.

@@ -460,15 +460,38 @@ pub async fn transcribe_audio(audio_data: Vec<u8>) -> Result<String, String> {
         params.set_print_timestamps(false);
         params.set_n_threads(std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(4));
 
+        // Anti-hallucination: suppress blank outputs and non-speech tokens
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+        // Segments with high entropy (low confidence) are likely hallucinations
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.6);
+        // Limit context to reduce repetition loops
+        params.set_n_max_text_ctx(128);
+
         state.full(params, &resampled)
             .map_err(|e| format!("Transcription failed: {}", e))?;
 
         let num_segments = state.full_n_segments();
 
         let mut transcript = String::new();
+        let mut last_text = String::new();
+        let mut repeat_count = 0;
         for i in 0..num_segments {
             if let Some(segment) = state.get_segment(i) {
                 if let Ok(text) = segment.to_str_lossy() {
+                    let trimmed = text.trim();
+                    if trimmed == last_text.trim() {
+                        repeat_count += 1;
+                        if repeat_count >= 3 {
+                            // Skip hallucination loops (3+ consecutive identical segments)
+                            continue;
+                        }
+                    } else {
+                        repeat_count = 0;
+                        last_text = trimmed.to_string();
+                    }
                     transcript.push_str(&text);
                     transcript.push(' ');
                 }
