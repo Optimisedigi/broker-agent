@@ -125,12 +125,10 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
 
-          # Clean signing key: GitHub secrets may wrap the base64 key data
-          # across multiple lines. Reconstruct as exactly 2 lines (comment + key).
-          FIRST_LINE=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | head -1)
-          REST=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tail -n +2 | tr -d '\n\r ')
-          export TAURI_SIGNING_PRIVATE_KEY="$(printf '%s\n%s' "$FIRST_LINE" "$REST")"
-          echo "Key debug: $(echo "$TAURI_SIGNING_PRIVATE_KEY" | wc -l) lines, first 20 chars: $(echo "$TAURI_SIGNING_PRIVATE_KEY" | head -1 | cut -c1-20)"
+          # The signing key is a single base64 blob. GitHub secrets may wrap it
+          # across lines with trailing spaces. Strip ALL whitespace to get clean base64.
+          export TAURI_SIGNING_PRIVATE_KEY=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '[:space:]')
+          echo "Clean key length: ${#TAURI_SIGNING_PRIVATE_KEY}"
 
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
