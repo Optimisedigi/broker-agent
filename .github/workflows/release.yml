@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.3.2)"
+        description: "Tag to release (e.g. v0.3.4)"
         required: true
 
 jobs:
@@ -56,20 +56,31 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-      - uses: tauri-apps/tauri-action@v0.5
+      - name: Build Tauri app
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "11.0"
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
+        run: npm run tauri build
+
+      - name: Upload updater artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See README for installation instructions."
-          releaseDraft: false
-          prerelease: false
+          name: macos-updater
+          path: |
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." --draft=false 2>/dev/null || true
+          gh release upload "$TAG" src-tauri/target/release/bundle/dmg/*.dmg --clobber
+          gh release upload "$TAG" src-tauri/target/release/bundle/macos/*.app.tar.gz --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -91,13 +102,83 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - uses: tauri-apps/tauri-action@v0.5
+      - name: Build Tauri app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: npm run tauri build
+
+      - name: Upload updater artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-updater
+          path: |
+            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
+
+      - name: Upload release assets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $TAG = "${{ inputs.tag || github.ref_name }}"
+          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." --draft=false 2>$null
+          gh release upload "$TAG" (Get-ChildItem src-tauri/target/release/bundle/nsis/*setup.exe) --clobber
+
+  publish-updater:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS updater artifacts
+        uses: actions/download-artifact@v4
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See README for installation instructions."
-          releaseDraft: false
-          prerelease: false
+          name: macos-updater
+          path: artifacts/macos
+
+      - name: Download Windows updater artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-updater
+          path: artifacts/windows
+
+      - name: Generate and upload latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Read signatures
+          MAC_SIG=$(cat artifacts/macos/*.app.tar.gz.sig)
+          WIN_SIG=$(cat artifacts/windows/*.nsis.zip.sig)
+
+          # Get download URLs
+          REPO="${{ github.repository }}"
+          MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/Broker.Agent_aarch64.app.tar.gz"
+          WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/Broker.Agent_${VERSION}_x64-setup.nsis.zip"
+
+          # Upload the nsis.zip to the release
+          gh release upload "$TAG" artifacts/windows/*.nsis.zip --clobber --repo "$REPO"
+
+          # Create latest.json
+          cat > latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See README for installation instructions.",
+            "pub_date": "${DATE}",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${MAC_SIG}",
+                "url": "${MAC_URL}"
+              },
+              "windows-x86_64": {
+                "signature": "${WIN_SIG}",
+                "url": "${WIN_URL}"
+              }
+            }
+          }
+          EOF
+
+          # Upload latest.json to release
+          gh release upload "$TAG" latest.json --clobber --repo "$REPO"
