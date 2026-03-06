@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.3.8)"
+        description: "Tag to release (e.g. v0.3.9)"
         required: true
 
 jobs:
@@ -72,29 +72,6 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
-          updaterJsonKeepUniversal: true
-          args: --bundles dmg,updater
-
-      - name: Save updater sig
-        run: |
-          echo "=== Looking for updater files ==="
-          find src-tauri/target/release/bundle -type f 2>/dev/null | sort
-          # The sig content is in the release asset uploaded by tauri-action
-          # Extract it from the .app.tar.gz.sig that was uploaded
-          TAG="${{ inputs.tag || github.ref_name }}"
-          # Download the sig from the release
-          gh release download "$TAG" --pattern "*.app.tar.gz.sig" --dir updater-files --repo "${{ github.repository }}" 2>/dev/null || true
-          gh release download "$TAG" --pattern "*.app.tar.gz" --dir updater-files --repo "${{ github.repository }}" 2>/dev/null || true
-          ls -la updater-files/ 2>/dev/null || echo "No updater files downloaded"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload updater artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-updater
-          path: updater-files/
-          if-no-files-found: warn
 
   build-windows:
     runs-on: windows-latest
@@ -128,28 +105,6 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
-          updaterJsonKeepUniversal: true
-          args: --bundles nsis,updater
-
-      - name: Save updater sig
-        shell: pwsh
-        run: |
-          Write-Host "=== Looking for updater files ==="
-          Get-ChildItem -Recurse src-tauri/target/release/bundle -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-          $TAG = "${{ inputs.tag || github.ref_name }}"
-          New-Item -ItemType Directory -Force -Path updater-files | Out-Null
-          gh release download "$TAG" --pattern "*.nsis.zip.sig" --dir updater-files --repo "${{ github.repository }}" 2>$null
-          gh release download "$TAG" --pattern "*.nsis.zip" --dir updater-files --repo "${{ github.repository }}" 2>$null
-          Get-ChildItem updater-files/ -ErrorAction SilentlyContinue
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload updater artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-updater
-          path: updater-files/
-          if-no-files-found: warn
 
   publish-updater:
     needs: [build-macos, build-windows]
@@ -157,20 +112,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download macOS updater artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-updater
-          path: artifacts/macos
-        continue-on-error: true
-
-      - name: Download Windows updater artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-updater
-          path: artifacts/windows
-        continue-on-error: true
-
       - name: Generate and upload latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,57 +121,57 @@ jobs:
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           REPO="${{ github.repository }}"
 
-          echo "=== All artifacts ==="
-          find artifacts/ -type f 2>/dev/null || echo "No artifacts found"
+          # List all release assets
+          echo "=== Release assets ==="
+          gh release view "$TAG" --json assets --jq '.assets[].name' --repo "$REPO"
 
-          # Try to get sigs from artifacts or directly from release
+          # Get signature files from the release
           mkdir -p sigs
+          gh release download "$TAG" --pattern "*.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
+          echo "=== Downloaded sigs ==="
+          ls -la sigs/
 
-          # macOS sig
-          if [ -f artifacts/macos/*.sig ]; then
-            MAC_SIG=$(cat artifacts/macos/*.sig)
-          else
-            gh release download "$TAG" --pattern "*.app.tar.gz.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
-            if ls sigs/*.sig 1>/dev/null 2>&1; then
-              MAC_SIG=$(cat sigs/*.sig)
-              rm sigs/*.sig
-            fi
+          # Find macOS sig (app.tar.gz.sig)
+          MAC_SIG=""
+          MAC_SIG_FILE=$(ls sigs/*.app.tar.gz.sig 2>/dev/null | head -1)
+          if [ -n "$MAC_SIG_FILE" ]; then
+            MAC_SIG=$(cat "$MAC_SIG_FILE")
           fi
 
-          # Windows sig
-          if [ -f artifacts/windows/*.sig ]; then
-            WIN_SIG=$(cat artifacts/windows/*.sig)
-          else
-            gh release download "$TAG" --pattern "*.nsis.zip.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
-            if ls sigs/*.sig 1>/dev/null 2>&1; then
-              WIN_SIG=$(cat sigs/*.sig)
-            fi
+          # Find Windows sig (nsis.zip.sig)
+          WIN_SIG=""
+          WIN_SIG_FILE=$(ls sigs/*.nsis.zip.sig 2>/dev/null | head -1)
+          if [ -n "$WIN_SIG_FILE" ]; then
+            WIN_SIG=$(cat "$WIN_SIG_FILE")
           fi
 
           echo "MAC_SIG length: ${#MAC_SIG}"
           echo "WIN_SIG length: ${#WIN_SIG}"
 
-          # Get the actual asset names from the release
-          MAC_ASSET=$(gh release view "$TAG" --json assets --jq '.assets[].name | select(endswith(".app.tar.gz"))' --repo "$REPO" || echo "")
-          WIN_ASSET=$(gh release view "$TAG" --json assets --jq '.assets[].name | select(endswith(".nsis.zip"))' --repo "$REPO" || echo "")
+          # Get asset names from release
+          MAC_ASSET=$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".app.tar.gz"))] | first // empty' --repo "$REPO")
+          WIN_ASSET=$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".nsis.zip"))] | first // empty' --repo "$REPO")
 
           echo "MAC_ASSET: $MAC_ASSET"
           echo "WIN_ASSET: $WIN_ASSET"
 
           if [ -z "$MAC_SIG" ] && [ -z "$WIN_SIG" ]; then
             echo "ERROR: No signatures found. Cannot create latest.json"
+            echo "This means TAURI_SIGNING_PRIVATE_KEY is not generating updater artifacts."
             exit 1
           fi
 
           # Build platforms JSON
           PLATFORMS="{"
+          FIRST=true
           if [ -n "$MAC_SIG" ] && [ -n "$MAC_ASSET" ]; then
             MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_ASSET}"
             PLATFORMS="${PLATFORMS}\"darwin-aarch64\":{\"signature\":\"${MAC_SIG}\",\"url\":\"${MAC_URL}\"}"
+            FIRST=false
           fi
           if [ -n "$WIN_SIG" ] && [ -n "$WIN_ASSET" ]; then
             WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_ASSET}"
-            if [ -n "$MAC_SIG" ] && [ -n "$MAC_ASSET" ]; then
+            if [ "$FIRST" = false ]; then
               PLATFORMS="${PLATFORMS},"
             fi
             PLATFORMS="${PLATFORMS}\"windows-x86_64\":{\"signature\":\"${WIN_SIG}\",\"url\":\"${WIN_URL}\"}"
