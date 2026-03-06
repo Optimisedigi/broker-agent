@@ -112,70 +112,65 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Generate and upload latest.json
+      - name: Install Rust and tauri-cli
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          cargo install tauri-cli --version "^2"
+
+      - name: Download, sign, and generate latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
+          source "$HOME/.cargo/env"
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           REPO="${{ github.repository }}"
 
-          # List all release assets
+          # List release assets
           echo "=== Release assets ==="
           gh release view "$TAG" --json assets --jq '.assets[].name' --repo "$REPO"
 
-          # Get signature files from the release
-          mkdir -p sigs
-          gh release download "$TAG" --pattern "*.sig" --dir sigs --repo "$REPO" 2>/dev/null || true
-          echo "=== Downloaded sigs ==="
-          ls -la sigs/
+          # Download updater bundles
+          mkdir -p bundles
+          gh release download "$TAG" --pattern "*.app.tar.gz" --dir bundles --repo "$REPO" 2>/dev/null || true
+          gh release download "$TAG" --pattern "*-setup.exe" --dir bundles --repo "$REPO" 2>/dev/null || true
 
-          # Find macOS sig (app.tar.gz.sig)
-          MAC_SIG=""
-          MAC_SIG_FILE=$(ls sigs/*.app.tar.gz.sig 2>/dev/null | head -1)
-          if [ -n "$MAC_SIG_FILE" ]; then
-            MAC_SIG=$(cat "$MAC_SIG_FILE")
-          fi
+          echo "=== Downloaded bundles ==="
+          ls -la bundles/
 
-          # Find Windows sig (nsis.zip.sig)
-          WIN_SIG=""
-          WIN_SIG_FILE=$(ls sigs/*.nsis.zip.sig 2>/dev/null | head -1)
-          if [ -n "$WIN_SIG_FILE" ]; then
-            WIN_SIG=$(cat "$WIN_SIG_FILE")
-          fi
-
-          echo "MAC_SIG length: ${#MAC_SIG}"
-          echo "WIN_SIG length: ${#WIN_SIG}"
-
-          # Get asset names from release
-          MAC_ASSET=$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".app.tar.gz"))] | first // empty' --repo "$REPO")
-          WIN_ASSET=$(gh release view "$TAG" --json assets --jq '[.assets[].name | select(endswith(".nsis.zip"))] | first // empty' --repo "$REPO")
-
-          echo "MAC_ASSET: $MAC_ASSET"
-          echo "WIN_ASSET: $WIN_ASSET"
-
-          if [ -z "$MAC_SIG" ] && [ -z "$WIN_SIG" ]; then
-            echo "ERROR: No signatures found. Cannot create latest.json"
-            echo "This means TAURI_SIGNING_PRIVATE_KEY is not generating updater artifacts."
-            exit 1
-          fi
-
-          # Build platforms JSON
+          # Sign the bundles with tauri signer
           PLATFORMS="{"
           FIRST=true
-          if [ -n "$MAC_SIG" ] && [ -n "$MAC_ASSET" ]; then
-            MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_ASSET}"
+
+          MAC_FILE=$(ls bundles/*.app.tar.gz 2>/dev/null | head -1)
+          if [ -n "$MAC_FILE" ]; then
+            echo "Signing macOS bundle..."
+            cargo tauri signer sign "$MAC_FILE" --private-key "$TAURI_SIGNING_PRIVATE_KEY"
+            MAC_SIG=$(cat "${MAC_FILE}.sig")
+            MAC_FILENAME=$(basename "$MAC_FILE")
+            MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
             PLATFORMS="${PLATFORMS}\"darwin-aarch64\":{\"signature\":\"${MAC_SIG}\",\"url\":\"${MAC_URL}\"}"
             FIRST=false
+            echo "macOS sig length: ${#MAC_SIG}"
           fi
-          if [ -n "$WIN_SIG" ] && [ -n "$WIN_ASSET" ]; then
-            WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_ASSET}"
+
+          WIN_FILE=$(ls bundles/*-setup.exe 2>/dev/null | head -1)
+          if [ -n "$WIN_FILE" ]; then
+            echo "Signing Windows bundle..."
+            cargo tauri signer sign "$WIN_FILE" --private-key "$TAURI_SIGNING_PRIVATE_KEY"
+            WIN_SIG=$(cat "${WIN_FILE}.sig")
+            WIN_FILENAME=$(basename "$WIN_FILE")
+            WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
             if [ "$FIRST" = false ]; then
               PLATFORMS="${PLATFORMS},"
             fi
             PLATFORMS="${PLATFORMS}\"windows-x86_64\":{\"signature\":\"${WIN_SIG}\",\"url\":\"${WIN_URL}\"}"
+            echo "Windows sig length: ${#WIN_SIG}"
           fi
+
           PLATFORMS="${PLATFORMS}}"
 
           # Create latest.json
