@@ -148,8 +148,7 @@ jobs:
           MAC_FILE=$(ls bundles/*.app.tar.gz 2>/dev/null | head -1)
           if [ -n "$MAC_FILE" ]; then
             echo "Signing macOS bundle..."
-            echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/privkey.txt
-            cargo tauri signer sign "$MAC_FILE" --private-key-path /tmp/privkey.txt
+            cargo tauri signer sign "$MAC_FILE"
             MAC_SIG=$(cat "${MAC_FILE}.sig")
             MAC_FILENAME=$(basename "$MAC_FILE")
             MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
@@ -161,7 +160,7 @@ jobs:
           WIN_FILE=$(ls bundles/*-setup.exe 2>/dev/null | head -1)
           if [ -n "$WIN_FILE" ]; then
             echo "Signing Windows bundle..."
-            cargo tauri signer sign "$WIN_FILE" --private-key-path /tmp/privkey.txt
+            cargo tauri signer sign "$WIN_FILE"
             WIN_SIG=$(cat "${WIN_FILE}.sig")
             WIN_FILENAME=$(basename "$WIN_FILE")
             WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
