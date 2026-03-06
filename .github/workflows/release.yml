@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.3.6)"
+        description: "Tag to release (e.g. v0.3.7)"
         required: true
 
 jobs:
@@ -57,22 +57,16 @@ jobs:
           security list-keychain -d user -s $KEYCHAIN_PATH
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0.5
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           MACOSX_DEPLOYMENT_TARGET: "11.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "11.0"
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
-        with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See README for installation instructions."
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: false
-          args: --bundles dmg,updater
+        run: |
+          npm run tauri build -- --bundles dmg,updater
+          echo "=== Bundle output ==="
+          find src-tauri/target/release/bundle -type f -name "*.tar.gz*" -o -name "*.dmg" | sort
 
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
@@ -81,6 +75,15 @@ jobs:
           path: |
             src-tauri/target/release/bundle/macos/*.app.tar.gz
             src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: error
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." 2>/dev/null || true
+          gh release upload "$TAG" src-tauri/target/release/bundle/dmg/*.dmg --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -103,18 +106,12 @@ jobs:
           workspaces: src-tauri
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0.5
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: "Broker Agent ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See README for installation instructions."
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: false
-          args: --bundles nsis,updater
+        run: |
+          npm run tauri build -- --bundles nsis,updater
+          Write-Host "=== Bundle output ==="
+          Get-ChildItem -Recurse src-tauri/target/release/bundle -Include *.exe,*.nsis.zip,*.sig | ForEach-Object { $_.FullName }
 
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
@@ -123,6 +120,15 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*.nsis.zip
             src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
+          if-no-files-found: error
+
+      - name: Upload release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $TAG = "${{ inputs.tag || github.ref_name }}"
+          gh release create "$TAG" --title "Broker Agent $TAG" --notes "See README for installation instructions." 2>$null
+          gh release upload "$TAG" (Get-ChildItem src-tauri/target/release/bundle/nsis/*setup.exe) --clobber
 
   publish-updater:
     needs: [build-macos, build-windows]
@@ -159,19 +165,17 @@ jobs:
           MAC_SIG=$(cat artifacts/macos/*.sig)
           WIN_SIG=$(cat artifacts/windows/*.sig)
 
-          # Get download URLs
-          REPO="${{ github.repository }}"
-          MAC_TAR=$(ls artifacts/macos/*.tar.gz | head -1)
-          MAC_FILENAME=$(basename "$MAC_TAR")
-          WIN_ZIP=$(ls artifacts/windows/*.nsis.zip | head -1)
-          WIN_FILENAME=$(basename "$WIN_ZIP")
+          # Get filenames
+          MAC_FILENAME=$(basename artifacts/macos/*.tar.gz)
+          WIN_FILENAME=$(basename artifacts/windows/*.nsis.zip)
 
+          REPO="${{ github.repository }}"
           MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
           WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
 
-          # Upload the updater files to the release
-          gh release upload "$TAG" "$MAC_TAR" --clobber --repo "$REPO"
-          gh release upload "$TAG" "$WIN_ZIP" --clobber --repo "$REPO"
+          # Upload the updater bundles to the release
+          gh release upload "$TAG" artifacts/macos/*.tar.gz --clobber --repo "$REPO"
+          gh release upload "$TAG" artifacts/windows/*.nsis.zip --clobber --repo "$REPO"
 
           # Create latest.json
           cat > latest.json << ENDJSON
@@ -195,5 +199,4 @@ jobs:
           echo "=== latest.json ==="
           cat latest.json
 
-          # Upload latest.json to release
           gh release upload "$TAG" latest.json --clobber --repo "$REPO"
