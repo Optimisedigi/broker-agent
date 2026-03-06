@@ -63,7 +63,7 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: "11.0"
           CFLAGS: "-march=armv8.2-a"
           CXXFLAGS: "-march=armv8.2-a"
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles dmg,updater
 
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
@@ -105,7 +105,7 @@ jobs:
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles nsis,updater
 
       - name: Upload updater artifacts
         uses: actions/upload-artifact@v4
