@@ -125,12 +125,12 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
 
-          # Reconstruct signing key file: GitHub secrets may wrap the base64
-          # key data across multiple lines, but tauri signer needs it as one line
-          COMMENT=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | head -1)
-          KEY_DATA=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | tail -n +2 | tr -d '\n\r ')
-          printf '%s\n%s\n' "$COMMENT" "$KEY_DATA" > /tmp/signing_key.txt
-          unset TAURI_SIGNING_PRIVATE_KEY
+          # Clean signing key: GitHub secrets may wrap the base64 key data
+          # across multiple lines. Reconstruct as exactly 2 lines (comment + key).
+          FIRST_LINE=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | head -1)
+          REST=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tail -n +2 | tr -d '\n\r ')
+          export TAURI_SIGNING_PRIVATE_KEY="$(printf '%s\n%s' "$FIRST_LINE" "$REST")"
+          echo "Key debug: $(echo "$TAURI_SIGNING_PRIVATE_KEY" | wc -l) lines, first 20 chars: $(echo "$TAURI_SIGNING_PRIVATE_KEY" | head -1 | cut -c1-20)"
 
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
@@ -156,7 +156,7 @@ jobs:
           MAC_FILE=$(ls bundles/*.app.tar.gz 2>/dev/null | head -1)
           if [ -n "$MAC_FILE" ]; then
             echo "Signing macOS bundle..."
-            cargo tauri signer sign --private-key-path /tmp/signing_key.txt "$MAC_FILE"
+            cargo tauri signer sign "$MAC_FILE"
             MAC_SIG=$(cat "${MAC_FILE}.sig")
             MAC_FILENAME=$(basename "$MAC_FILE")
             MAC_URL="https://github.com/${REPO}/releases/download/${TAG}/${MAC_FILENAME}"
@@ -168,7 +168,7 @@ jobs:
           WIN_FILE=$(ls bundles/*-setup.exe 2>/dev/null | head -1)
           if [ -n "$WIN_FILE" ]; then
             echo "Signing Windows bundle..."
-            cargo tauri signer sign --private-key-path /tmp/signing_key.txt "$WIN_FILE"
+            cargo tauri signer sign "$WIN_FILE"
             WIN_SIG=$(cat "${WIN_FILE}.sig")
             WIN_FILENAME=$(basename "$WIN_FILE")
             WIN_URL="https://github.com/${REPO}/releases/download/${TAG}/${WIN_FILENAME}"
