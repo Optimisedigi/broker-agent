@@ -44,14 +44,14 @@
     }
   },
   "productName": "Broker Agent",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "identifier": "com.brokeragent.app",
   "plugins": {
     "updater": {
       "endpoints": [
         "https://github.com/Optimisedigi/broker-agent/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEzQTRDNEJFQTUwNUUzQzYKUldURzR3V2x2c1NrbytNT2MvK2pXRzdkblE3R0d3dDJxNjUwWEg1dUE4KzdRWDFwbmJPcXhJSVEK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgyRjI2MkE5MDZBMzk1QUUKUldTdWxhTUdxV0x5Z3I0ZVFpT290TndNQjBoUktMYjR1aTJydHR0aDE1QWxvYVEwZTRaOTJsNnMK"
     }
   },
   "app": {
